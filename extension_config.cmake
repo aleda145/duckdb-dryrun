@@ -1,7 +1,9 @@
 # This file is included by DuckDB's build system. It specifies which extension to load
 
 # Extension from this repo
-duckdb_extension_load(waddle
+duckdb_extension_load(parquet)
+
+duckdb_extension_load(dryrun
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
 )
 

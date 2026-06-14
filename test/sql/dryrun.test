@@ -1,0 +1,90 @@
+# name: test/sql/dryrun.test
+# description: test dryrun extension
+# group: [sql]
+
+require parquet
+
+require dryrun
+
+statement ok
+COPY (
+	SELECT
+		i::INTEGER AS i,
+		(i % 10)::INTEGER AS bucket,
+		'payload_' || i::VARCHAR AS payload
+	FROM range(0, 4096) t(i)
+) TO '{TEMP_DIR}/dryrun_events.parquet' (FORMAT PARQUET, ROW_GROUP_SIZE 2048);
+
+statement ok
+COPY (
+	SELECT i::INTEGER AS i, 'a_' || i::VARCHAR AS payload
+	FROM range(0, 128) t(i)
+) TO '{TEMP_DIR}/dryrun_events_a.parquet' (FORMAT PARQUET);
+
+statement ok
+COPY (
+	SELECT i::INTEGER AS i, 'b_' || i::VARCHAR AS payload
+	FROM range(128, 256) t(i)
+) TO '{TEMP_DIR}/dryrun_events_b.parquet' (FORMAT PARQUET);
+
+# One local Parquet file, SELECT *.
+query IIIIIIT
+SELECT
+	estimated_compute_bytes > 0,
+	estimated_compute_bytes = estimated_compressed_bytes,
+	estimated_uncompressed_bytes > 0,
+	estimated_files,
+	estimated_row_groups,
+	confidence,
+	notes LIKE '%estimated_compute_bytes equals estimated_compressed_bytes%'
+FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''');
+----
+true	true	true	1	2	high	true
+
+# Projected columns should estimate fewer bytes than SELECT *.
+query I
+SELECT projected.estimated_compressed_bytes < full_scan.estimated_compressed_bytes
+FROM dryrun('SELECT i FROM ''{TEMP_DIR}/dryrun_events.parquet''') projected,
+     dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''') full_scan;
+----
+true
+
+# Multiple Parquet files via glob.
+query II
+SELECT estimated_files, estimated_row_groups >= 2
+FROM dryrun('SELECT * FROM read_parquet(''{TEMP_DIR}/dryrun_events_*.parquet'')');
+----
+2	true
+
+# Simple filter should prune at least one row group.
+query IT
+SELECT filtered.estimated_row_groups < full_scan.estimated_row_groups, filtered.confidence
+FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet'' WHERE i < 10') filtered,
+     dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''') full_scan;
+----
+true	medium
+
+# Complex filters fall back without executing the target query expression.
+query IT
+SELECT notes LIKE '%filter not analyzable%', confidence
+FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet'' WHERE i = CAST(''not-an-int'' AS INTEGER)');
+----
+true	low
+
+# CSV/JSON are rejected clearly.
+statement error
+SELECT * FROM dryrun('SELECT * FROM ''{TEMP_DIR}/events.csv''');
+----
+Binder Error: dryrun only supports Parquet scans in v1
+
+# Non-SELECT queries are rejected.
+statement error
+SELECT * FROM dryrun('CREATE TABLE x(i INTEGER)');
+----
+Binder Error: dryrun only supports read-only SELECT queries
+
+# Multiple statements are rejected.
+statement error
+SELECT * FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''; SELECT 1');
+----
+Binder Error: dryrun only supports exactly one SQL statement
