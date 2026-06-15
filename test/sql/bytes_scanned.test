@@ -1,0 +1,265 @@
+# name: test/sql/bytes_scanned.test
+# description: test dryrun bytes scanned estimates
+# group: [sql]
+
+require parquet
+
+require dryrun
+
+# Bytes scanned checks against a real larger Parquet file. These checks validate
+# dryrun bytes against Parquet metadata, then compare the same query shape with
+# DuckDB JSON profiling bytes from actually executed queries.
+
+# Full scan bytes should match the sum of compressed Parquet column chunks.
+query IITT
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2019-01.parquet''')
+), metadata AS (
+	SELECT
+		sum(total_compressed_size) AS compressed_bytes,
+		sum(total_uncompressed_size) AS uncompressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2019-01.parquet')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
+	estimate.confidence,
+	estimate.notes
+FROM estimate, metadata;
+----
+true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+
+# Single-column projection bytes should match the projected column chunk.
+query IITT
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet''')
+), metadata AS (
+	SELECT
+		sum(total_compressed_size) AS compressed_bytes,
+		sum(total_uncompressed_size) AS uncompressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2019-01.parquet')
+	WHERE path_in_schema = 'PULocationID'
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
+	estimate.confidence,
+	estimate.notes
+FROM estimate, metadata;
+----
+true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+
+# A different single-column projection should use that column's chunk bytes.
+query IITT
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2019-01.parquet''')
+), metadata AS (
+	SELECT
+		sum(total_compressed_size) AS compressed_bytes,
+		sum(total_uncompressed_size) AS uncompressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2019-01.parquet')
+	WHERE path_in_schema = 'fare_amount'
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
+	estimate.confidence,
+	estimate.notes
+FROM estimate, metadata;
+----
+true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+
+# Multi-column projection should add the selected column chunks and remain less
+# than a full scan.
+query III
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT PULocationID, fare_amount FROM ''data/yellow_tripdata_2019-01.parquet''')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2019-01.parquet')
+	WHERE path_in_schema IN ('PULocationID', 'fare_amount')
+), full_scan AS (
+	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2019-01.parquet''')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_compressed_bytes > 0,
+	estimate.estimated_compressed_bytes < full_scan.estimated_compressed_bytes
+FROM estimate, metadata, full_scan;
+----
+true	true	true
+
+# Simple filter on a projected column should retain that projection's bytes and
+# lower confidence to medium.
+query IIT
+WITH filtered AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet'' WHERE PULocationID = 132')
+), projected AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet''')
+)
+SELECT
+	filtered.estimated_compressed_bytes = projected.estimated_compressed_bytes,
+	filtered.estimated_uncompressed_bytes = projected.estimated_uncompressed_bytes,
+	filtered.confidence
+FROM filtered, projected;
+----
+true	true	medium
+
+# LIMIT does not reduce Parquet column-chunk bytes.
+query IIT
+WITH limited AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet'' LIMIT 100')
+), projected AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet''')
+)
+SELECT
+	limited.estimated_compressed_bytes = projected.estimated_compressed_bytes,
+	limited.estimated_uncompressed_bytes = projected.estimated_uncompressed_bytes,
+	limited.confidence
+FROM limited, projected;
+----
+true	true	high
+
+# Complex filters fall back to unfiltered projection bytes with low confidence.
+query IIT
+WITH complex_filter AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet'' WHERE abs(PULocationID) = 132')
+), projected AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2019-01.parquet''')
+)
+SELECT
+	complex_filter.estimated_compressed_bytes = projected.estimated_compressed_bytes,
+	complex_filter.notes LIKE '%filter not analyzable%',
+	complex_filter.confidence
+FROM complex_filter, projected;
+----
+true	true	low
+
+# Non-trivial projections that are not yet analyzable fall back to all columns.
+query IIT
+WITH count_fallback AS (
+	SELECT * FROM dryrun('SELECT count(*) FROM ''data/yellow_tripdata_2019-01.parquet''')
+), full_scan AS (
+	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2019-01.parquet''')
+)
+SELECT
+	count_fallback.estimated_compressed_bytes = full_scan.estimated_compressed_bytes,
+	count_fallback.notes LIKE '%projection not analyzable%',
+	count_fallback.confidence
+FROM count_fallback, full_scan;
+----
+true	true	low
+
+# Profiling bytes: execute the target queries after dryrun and extract DuckDB's
+# reported total_bytes_read from the profiling JSON files.
+
+statement ok
+PRAGMA enable_profiling='json';
+
+statement ok
+PRAGMA profiling_output='{TEMP_DIR}/profile_yellow_full.json';
+
+statement ok
+CREATE OR REPLACE TEMP TABLE dryrun_profile_full AS
+SELECT * FROM 'data/yellow_tripdata_2019-01.parquet';
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+PRAGMA enable_profiling='json';
+
+statement ok
+PRAGMA profiling_output='{TEMP_DIR}/profile_yellow_pulocation.json';
+
+statement ok
+CREATE OR REPLACE TEMP TABLE dryrun_profile_pulocation AS
+SELECT PULocationID FROM 'data/yellow_tripdata_2019-01.parquet';
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+PRAGMA enable_profiling='json';
+
+statement ok
+PRAGMA profiling_output='{TEMP_DIR}/profile_yellow_fare.json';
+
+statement ok
+CREATE OR REPLACE TEMP TABLE dryrun_profile_fare AS
+SELECT fare_amount FROM 'data/yellow_tripdata_2019-01.parquet';
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+PRAGMA enable_profiling='json';
+
+statement ok
+PRAGMA profiling_output='{TEMP_DIR}/profile_yellow_two_columns.json';
+
+statement ok
+CREATE OR REPLACE TEMP TABLE dryrun_profile_two_columns AS
+SELECT PULocationID, fare_amount FROM 'data/yellow_tripdata_2019-01.parquet';
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+PRAGMA enable_profiling='json';
+
+statement ok
+PRAGMA profiling_output='{TEMP_DIR}/profile_yellow_filter.json';
+
+statement ok
+CREATE OR REPLACE TEMP TABLE dryrun_profile_filter AS
+SELECT PULocationID FROM 'data/yellow_tripdata_2019-01.parquet' WHERE PULocationID = 132;
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+PRAGMA enable_profiling='json';
+
+statement ok
+PRAGMA profiling_output='{TEMP_DIR}/profile_yellow_limit.json';
+
+statement ok
+CREATE OR REPLACE TEMP TABLE dryrun_profile_limit AS
+SELECT PULocationID FROM 'data/yellow_tripdata_2019-01.parquet' LIMIT 100;
+
+statement ok
+PRAGMA disable_profiling;
+
+# Every profiled query should produce a readable byte report, and projections
+# should be directionally below the full scan according to DuckDB's profiling signal.
+query TTTTTT
+WITH bytes AS (
+	SELECT 'full' AS name, max(try_cast(regexp_extract(json, '"total_bytes_read": ([0-9]+)', 1) AS BIGINT)) AS total_bytes_read
+	FROM read_csv('{TEMP_DIR}/profile_yellow_full.json', columns={'json': 'VARCHAR'}, sep='🦆')
+	UNION ALL
+	SELECT 'pulocation' AS name, max(try_cast(regexp_extract(json, '"total_bytes_read": ([0-9]+)', 1) AS BIGINT)) AS total_bytes_read
+	FROM read_csv('{TEMP_DIR}/profile_yellow_pulocation.json', columns={'json': 'VARCHAR'}, sep='🦆')
+	UNION ALL
+	SELECT 'fare' AS name, max(try_cast(regexp_extract(json, '"total_bytes_read": ([0-9]+)', 1) AS BIGINT)) AS total_bytes_read
+	FROM read_csv('{TEMP_DIR}/profile_yellow_fare.json', columns={'json': 'VARCHAR'}, sep='🦆')
+	UNION ALL
+	SELECT 'two_columns' AS name, max(try_cast(regexp_extract(json, '"total_bytes_read": ([0-9]+)', 1) AS BIGINT)) AS total_bytes_read
+	FROM read_csv('{TEMP_DIR}/profile_yellow_two_columns.json', columns={'json': 'VARCHAR'}, sep='🦆')
+	UNION ALL
+	SELECT 'filter' AS name, max(try_cast(regexp_extract(json, '"total_bytes_read": ([0-9]+)', 1) AS BIGINT)) AS total_bytes_read
+	FROM read_csv('{TEMP_DIR}/profile_yellow_filter.json', columns={'json': 'VARCHAR'}, sep='🦆')
+	UNION ALL
+	SELECT 'limit' AS name, max(try_cast(regexp_extract(json, '"total_bytes_read": ([0-9]+)', 1) AS BIGINT)) AS total_bytes_read
+	FROM read_csv('{TEMP_DIR}/profile_yellow_limit.json', columns={'json': 'VARCHAR'}, sep='🦆')
+)
+SELECT
+	min(total_bytes_read) >= 0,
+	max(total_bytes_read) FILTER (WHERE name = 'pulocation') <= max(total_bytes_read) FILTER (WHERE name = 'full'),
+	max(total_bytes_read) FILTER (WHERE name = 'fare') <= max(total_bytes_read) FILTER (WHERE name = 'full'),
+	max(total_bytes_read) FILTER (WHERE name = 'two_columns') <= max(total_bytes_read) FILTER (WHERE name = 'full'),
+	max(total_bytes_read) FILTER (WHERE name = 'filter') <= max(total_bytes_read) FILTER (WHERE name = 'pulocation') * 1.25,
+	max(total_bytes_read) FILTER (WHERE name = 'limit') <= max(total_bytes_read) FILTER (WHERE name = 'pulocation') * 1.25
+FROM bytes;
+----
+true	true	true	true	true	true
