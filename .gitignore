@@ -6,3 +6,6 @@ duckdb_unittest_tempdir/
 testext
 test/python/__pycache__/
 .Rhistory
+.cache
+data/*
+!data/yellow_tripdata_2019-01.parquet

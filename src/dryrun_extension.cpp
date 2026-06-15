@@ -320,6 +320,11 @@ static string StripConstant(string value) {
 		value.pop_back();
 		value = TrimCopy(std::move(value));
 	}
+	auto typed_literal = std::regex(R"(^\s*(DATE|TIMESTAMP|TIME)\s+('.*')\s*$)", std::regex::icase);
+	std::smatch typed_match;
+	if (std::regex_match(value, typed_match, typed_literal)) {
+		value = typed_match[2].str();
+	}
 	if (value.size() >= 2 && value.front() == '\'' && value.back() == '\'') {
 		value = value.substr(1, value.size() - 2);
 		string result;
