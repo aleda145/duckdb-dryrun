@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,22 +125,59 @@ def print_table(headers: list[str], rows: list[list[Any]]) -> None:
         print(" | ".join(row[index].ljust(widths[index]) for index in range(len(headers))))
 
 
-def main() -> int:
-    cases = [
+def default_cases() -> list[BenchmarkCase]:
+    return [
         BenchmarkCase("titanic_full", REMOTE_TITANIC, f"SELECT * FROM '{sql_string(REMOTE_TITANIC)}'"),
         BenchmarkCase(
-            "titanic_projection",
+            "titanic_PassengerId",
             REMOTE_TITANIC,
             f"SELECT PassengerId FROM '{sql_string(REMOTE_TITANIC)}'",
         ),
         BenchmarkCase("properties_full", REMOTE_PROPERTIES, f"SELECT * FROM '{sql_string(REMOTE_PROPERTIES)}'"),
         BenchmarkCase(
-            "properties_projection",
+            "properties_price",
             REMOTE_PROPERTIES,
             f"SELECT price FROM '{sql_string(REMOTE_PROPERTIES)}'",
         ),
     ]
 
+
+def name_from_url(url: str, fallback: str) -> str:
+    filename = Path(unquote(urlparse(url).path)).name
+    if not filename:
+        return fallback
+    if filename.lower().endswith(".parquet"):
+        filename = filename[: -len(".parquet")]
+    return filename or fallback
+
+
+def custom_cases(urls: list[str], column: str | None) -> list[BenchmarkCase]:
+    cases = []
+    for index, url in enumerate(urls, start=1):
+        fallback = "custom" if len(urls) == 1 else f"custom_{index}"
+        name = name_from_url(url, fallback)
+        cases.append(BenchmarkCase(f"{name}_full", url, f"SELECT * FROM '{sql_string(url)}'"))
+        if column is not None:
+            cases.append(
+                BenchmarkCase(
+                    f"{name}_{column}",
+                    url,
+                    f"SELECT {column} FROM '{sql_string(url)}'",
+                )
+            )
+    return cases
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Benchmark dryrun bytes against DuckDB profiled bytes for remote Parquet")
+    parser.add_argument("urls", nargs="*", help="remote Parquet URL(s) to benchmark instead of the built-in defaults")
+    parser.add_argument("--column", help="column to project for custom URL benchmarks")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    cases = custom_cases(args.urls, args.column) if args.urls else default_cases()
     temp_dir = Path(tempfile.mkdtemp(prefix="dryrun-benchmark-"))
     db = temp_dir / "benchmark.duckdb"
     try:
@@ -160,8 +199,11 @@ def main() -> int:
             )
 
         print("remote_sources:")
-        print(f"- titanic: {REMOTE_TITANIC}")
-        print(f"- properties: {REMOTE_PROPERTIES}")
+        seen_urls = []
+        for case in cases:
+            if case.url not in seen_urls:
+                seen_urls.append(case.url)
+                print(f"- {case.url}")
         print()
         print_table(
             ["case", "dryrun_bytes", "profiled_bytes", "profiled/dryrun", "confidence"],
