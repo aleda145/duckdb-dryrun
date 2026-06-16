@@ -26,12 +26,104 @@ REMOTE_PROPERTIES = "https://data.bostadsbussen.se/properties.parquet"
 @dataclass(frozen=True)
 class BenchmarkCase:
     name: str
-    url: str
+    sources: tuple[str, ...]
     query: str
 
 
 def sql_string(value: str | Path) -> str:
     return str(value).replace("'", "''")
+
+
+def strip_trailing_semicolon(query: str) -> str:
+    query = query.strip()
+    while query.endswith(";"):
+        query = query[:-1].rstrip()
+    return query
+
+
+def startswith_at(value: str, index: int, prefixes: tuple[str, ...]) -> bool:
+    return any(value.startswith(prefix, index) for prefix in prefixes)
+
+
+def scan_url(value: str, index: int) -> tuple[str, int]:
+    end = index
+    while end < len(value) and not value[end].isspace() and value[end] not in ",);":
+        end += 1
+    return value[index:end], end
+
+
+def quote_bare_parquet_urls(query: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_single_quote = False
+    in_double_quote = False
+    url_prefixes = ("https://", "http://")
+    while index < len(query):
+        char = query[index]
+        if in_single_quote:
+            result.append(char)
+            if char == "'" and index + 1 < len(query) and query[index + 1] == "'":
+                result.append(query[index + 1])
+                index += 2
+                continue
+            if char == "'":
+                in_single_quote = False
+            index += 1
+            continue
+        if in_double_quote:
+            result.append(char)
+            if char == '"' and index + 1 < len(query) and query[index + 1] == '"':
+                result.append(query[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                in_double_quote = False
+            index += 1
+            continue
+        if char == "'":
+            in_single_quote = True
+            result.append(char)
+            index += 1
+            continue
+        if char == '"':
+            in_double_quote = True
+            result.append(char)
+            index += 1
+            continue
+        if startswith_at(query, index, url_prefixes):
+            url, end = scan_url(query, index)
+            if ".parquet" in url.lower():
+                result.append(f"'{sql_string(url)}'")
+                index = end
+                continue
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
+def normalize_query(query: str) -> str:
+    return quote_bare_parquet_urls(strip_trailing_semicolon(query))
+
+
+def looks_like_sql(value: str) -> bool:
+    first_word = value.lstrip().split(None, 1)[0].lower() if value.strip() else ""
+    return first_word in {"select", "with"}
+
+
+def extract_remote_sources(query: str) -> tuple[str, ...]:
+    sources: list[str] = []
+    index = 0
+    url_prefixes = ("https://", "http://")
+    while index < len(query):
+        if startswith_at(query, index, url_prefixes):
+            url, end = scan_url(query, index)
+            url = url.strip("'\"")
+            if ".parquet" in url.lower() and url not in sources:
+                sources.append(url)
+            index = end
+            continue
+        index += 1
+    return tuple(sources)
 
 
 def run_duckdb(sql: str, db: Path, *, json_output: bool = False, quiet: bool = False) -> str:
@@ -106,7 +198,7 @@ def profile(case: BenchmarkCase, db: Path, temp_dir: Path) -> dict[str, Any]:
         quiet=True,
     )
     if not profile_path.exists():
-        raise RuntimeError(f"profiling output was not created at {profile_path}")
+        return {"total_bytes_read": 0, "profile_missing": True}
     return json.loads(profile_path.read_text())
 
 
@@ -127,16 +219,16 @@ def print_table(headers: list[str], rows: list[list[Any]]) -> None:
 
 def default_cases() -> list[BenchmarkCase]:
     return [
-        BenchmarkCase("titanic_full", REMOTE_TITANIC, f"SELECT * FROM '{sql_string(REMOTE_TITANIC)}'"),
+        BenchmarkCase("titanic_full", (REMOTE_TITANIC,), f"SELECT * FROM '{sql_string(REMOTE_TITANIC)}'"),
         BenchmarkCase(
             "titanic_PassengerId",
-            REMOTE_TITANIC,
+            (REMOTE_TITANIC,),
             f"SELECT PassengerId FROM '{sql_string(REMOTE_TITANIC)}'",
         ),
-        BenchmarkCase("properties_full", REMOTE_PROPERTIES, f"SELECT * FROM '{sql_string(REMOTE_PROPERTIES)}'"),
+        BenchmarkCase("properties_full", (REMOTE_PROPERTIES,), f"SELECT * FROM '{sql_string(REMOTE_PROPERTIES)}'"),
         BenchmarkCase(
             "properties_price",
-            REMOTE_PROPERTIES,
+            (REMOTE_PROPERTIES,),
             f"SELECT price FROM '{sql_string(REMOTE_PROPERTIES)}'",
         ),
     ]
@@ -156,38 +248,76 @@ def custom_cases(urls: list[str], column: str | None) -> list[BenchmarkCase]:
     for index, url in enumerate(urls, start=1):
         fallback = "custom" if len(urls) == 1 else f"custom_{index}"
         name = name_from_url(url, fallback)
-        cases.append(BenchmarkCase(f"{name}_full", url, f"SELECT * FROM '{sql_string(url)}'"))
+        cases.append(BenchmarkCase(f"{name}_full", (url,), f"SELECT * FROM '{sql_string(url)}'"))
         if column is not None:
             cases.append(
                 BenchmarkCase(
                     f"{name}_{column}",
-                    url,
+                    (url,),
                     f"SELECT {column} FROM '{sql_string(url)}'",
                 )
             )
     return cases
 
 
+def name_from_sql(query: str, index: int) -> str:
+    sources = extract_remote_sources(query)
+    if len(sources) == 1:
+        return f"{name_from_url(sources[0], f'query_{index}')}_sql"
+    return "query" if index == 1 else f"query_{index}"
+
+
+def sql_cases(queries: list[str]) -> list[BenchmarkCase]:
+    cases = []
+    for index, query in enumerate(queries, start=1):
+        normalized_query = normalize_query(query)
+        cases.append(
+            BenchmarkCase(
+                name_from_sql(normalized_query, index),
+                extract_remote_sources(normalized_query),
+                normalized_query,
+            )
+        )
+    return cases
+
+
+def benchmark_cases(inputs: list[str], column: str | None) -> list[BenchmarkCase]:
+    if not inputs:
+        return default_cases()
+    if any(looks_like_sql(value) for value in inputs):
+        if column is not None:
+            raise RuntimeError("--column can only be used with URL shorthand benchmarks")
+        return sql_cases(inputs)
+    return custom_cases(inputs, column)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark dryrun bytes against DuckDB profiled bytes for remote Parquet")
-    parser.add_argument("urls", nargs="*", help="remote Parquet URL(s) to benchmark instead of the built-in defaults")
+    parser.add_argument(
+        "inputs",
+        nargs="*",
+        help="remote Parquet URL(s), or SQL query text, to benchmark instead of the built-in defaults",
+    )
     parser.add_argument("--column", help="column to project for custom URL benchmarks")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    cases = custom_cases(args.urls, args.column) if args.urls else default_cases()
+    cases = benchmark_cases(args.inputs, args.column)
     temp_dir = Path(tempfile.mkdtemp(prefix="dryrun-benchmark-"))
     db = temp_dir / "benchmark.duckdb"
     try:
         setup_remote_extensions(db)
         rows = []
+        missing_profiles = []
         for case in cases:
             estimate = dryrun(case.query, db)
             profile_data = profile(case, db, temp_dir)
             dryrun_bytes = int(estimate["estimated_compressed_bytes"])
             profiled_bytes = int(profile_data["total_bytes_read"])
+            if profile_data.get("profile_missing"):
+                missing_profiles.append(case.name)
             rows.append(
                 [
                     case.name,
@@ -201,14 +331,22 @@ def main() -> int:
         print("remote_sources:")
         seen_urls = []
         for case in cases:
-            if case.url not in seen_urls:
-                seen_urls.append(case.url)
-                print(f"- {case.url}")
+            for source in case.sources:
+                if source not in seen_urls:
+                    seen_urls.append(source)
+                    print(f"- {source}")
+        if not seen_urls:
+            print("- none detected")
         print()
         print_table(
             ["case", "dryrun_bytes", "profiled_bytes", "profiled/dryrun", "confidence"],
             rows,
         )
+        if missing_profiles:
+            print()
+            print("notes:")
+            for name in missing_profiles:
+                print(f"- {name}: DuckDB did not emit profiling JSON; treated profiled_bytes as 0")
         return 0
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
