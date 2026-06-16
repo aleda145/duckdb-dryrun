@@ -556,8 +556,8 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 			row_group.file_name = key.file_name;
 			row_group.row_group_id = key.row_group_id;
 
-			bool include_column =
-			    parsed.projection.all_columns || parsed.projection.columns.find(column_name) != parsed.projection.columns.end();
+			bool include_column = parsed.projection.all_columns ||
+			                      parsed.projection.columns.find(column_name) != parsed.projection.columns.end();
 			if (include_column) {
 				row_group.compressed_bytes += GetOptionalInt64(*metadata, 3, row);
 				row_group.uncompressed_bytes += GetOptionalInt64(*metadata, 4, row);
