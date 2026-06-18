@@ -47,9 +47,11 @@
 .scenario-button {
   width: 100%;
   border: 0;
-  padding: 7px 8px;
-  display: grid;
-  gap: 3px;
+  padding: 6px 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
   color: inherit;
   background: transparent;
   text-align: left;
@@ -62,16 +64,31 @@ textarea:focus {
   outline-offset: -2px;
 }
 
-.scenario-button strong {
+.scenario-copy {
+  display: grid;
+}
+
+.scenario-copy strong {
   color: var(--text-h);
   font-size: 15px;
   line-height: 1.1;
+  white-space: nowrap;
 }
 
+.scenario-copy span,
+.scenario-facts,
 .scenario-button > span {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.2;
+}
+
+.scenario-facts {
+  display: grid;
+  gap: 2px;
+  flex: 0 0 auto;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .scenario-kicker {
@@ -80,39 +97,12 @@ textarea:focus {
   text-transform: uppercase;
 }
 
-.scenario-meta {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 2px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-raised);
-}
-
-.meta {
-  padding: 4px 7px;
-}
-
-.meta + .meta {
-  border-left: 1px solid var(--border);
-}
-
-.meta span,
 .metric span {
   display: block;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-}
-
-.meta strong {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-h);
-  font-size: 12px;
 }
 
 .query-section {
@@ -366,14 +356,8 @@ textarea {
     border-radius: 6px;
   }
 
-  .scenario-meta,
   .metric-grid {
     grid-template-columns: 1fr;
-  }
-
-  .meta + .meta {
-    border-top: 1px solid var(--border);
-    border-left: 0;
   }
 
   textarea {

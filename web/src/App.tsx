@@ -310,13 +310,14 @@ function ScenarioCard({
   return (
     <article className={active ? "scenario-card active" : "scenario-card"}>
       <button type="button" className="scenario-button" onClick={onSelect}>
-        <span className="scenario-kicker">Gaia 5M</span>
-        <strong>{scenario.title}</strong>
-        <span>{scenario.summary}</span>
-        <div className="scenario-meta">
-          <Meta label="Rows" value={scenario.rows} />
-          <Meta label="Size" value={scenario.fileSize} />
-        </div>
+        <span className="scenario-copy">
+          <span className="scenario-kicker">Gaia 5M</span>
+          <strong>{scenario.title}</strong>
+        </span>
+        <span className="scenario-facts">
+          <span>{scenario.rows} rows</span>
+          <span>{scenario.fileSize}</span>
+        </span>
       </button>
     </article>
   );
@@ -367,15 +368,6 @@ function ParquetFooterReadPanel({ events }: { events: NetworkTrafficEvent[] }) {
             })`
           : "waiting for first Parquet footer request"}
       </code>
-    </div>
-  );
-}
-
-function Meta({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="meta">
-      <span>{label}</span>
-      <strong>{value}</strong>
     </div>
   );
 }
