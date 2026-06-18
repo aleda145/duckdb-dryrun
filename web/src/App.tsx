@@ -282,12 +282,10 @@ function App() {
         ) : query.error ? (
           <ErrorPanel message={query.error} />
         ) : latestResult ? (
-          <MetricGrid result={latestResult} />
+          <ResultList result={latestResult} trafficEvents={trafficEvents} />
         ) : (
           <EmptyPanel engineReady={engine.ready} />
         )}
-
-        <ParquetFooterReadPanel events={trafficEvents} />
       </section>
 
       <footer className="footer">
@@ -323,9 +321,15 @@ function ScenarioCard({
   );
 }
 
-function MetricGrid({ result }: { result: DryrunRow }) {
+function ResultList({
+  result,
+  trafficEvents,
+}: {
+  result: DryrunRow;
+  trafficEvents: NetworkTrafficEvent[];
+}) {
   return (
-    <div className="metric-grid">
+    <div className="result-list">
       <Metric
         label="estimated_compute_bytes"
         value={formatBytes(result.estimated_compute_bytes)}
@@ -336,6 +340,7 @@ function MetricGrid({ result }: { result: DryrunRow }) {
       />
       <Metric label="files" value={formatNumber(result.estimated_files)} />
       <Metric label="confidence" value={result.confidence ?? "unknown"} />
+      <ParquetFooterReadMetric events={trafficEvents} />
     </div>
   );
 }
@@ -349,25 +354,17 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ParquetFooterReadPanel({ events }: { events: NetworkTrafficEvent[] }) {
+function ParquetFooterReadMetric({ events }: { events: NetworkTrafficEvent[] }) {
   const latestGet = events.findLast((event) => event.method === "GET");
-  const byteRange = latestGet?.range?.match(/^bytes=(\d+)-(\d+)$/);
 
   return (
-    <div
-      className="traffic-panel"
-      aria-label="Parquet metadata network traffic"
-    >
-      <strong>Parquet footer read</strong>
-      <code>
+    <div className="metric result-row">
+      <span>Parquet footer read</span>
+      <strong>
         {latestGet
-          ? `${formatBytes(latestGet.responseBytes)} (${
-              byteRange
-                ? `byte range: ${byteRange[1]} - ${byteRange[2]}`
-                : "byte range unknown"
-            })`
+          ? formatBytes(latestGet.responseBytes)
           : "waiting for first Parquet footer request"}
-      </code>
+      </strong>
     </div>
   );
 }

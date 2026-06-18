@@ -107,7 +107,7 @@ textarea:focus {
 }
 
 .query-section {
-  width: min(700px, 100%);
+  width: min(560px, 100%);
   margin: 0 auto;
   overflow: hidden;
   background: var(--code-bg);
@@ -166,6 +166,8 @@ textarea {
 }
 
 .result-section {
+  width: min(440px, 100%);
+  margin: 0 auto;
   padding: 8px;
   display: grid;
   gap: 7px;
@@ -194,9 +196,8 @@ textarea {
   text-align: right;
 }
 
-.metric-grid {
+.result-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -205,49 +206,22 @@ textarea {
 }
 
 .metric {
-  min-height: 50px;
-  padding: 7px 9px;
+  min-height: 40px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
   background: var(--surface-raised);
   box-sizing: border-box;
 }
 
 .metric strong {
   display: block;
-  margin-top: 3px;
   color: var(--text-h);
   font-size: 15px;
   line-height: 1.1;
   overflow-wrap: anywhere;
-}
-
-.traffic-panel {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 8px;
-  background: var(--surface-raised);
-}
-
-.traffic-panel strong {
-  color: var(--text-h);
-  font-size: 12px;
-}
-
-.traffic-panel span {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.traffic-panel code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  background: transparent;
-  padding: 0;
 }
 
 .message-panel {
@@ -332,11 +306,7 @@ textarea {
     text-align: left;
   }
 
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .traffic-panel {
+  .metric {
     grid-template-columns: 1fr;
   }
 }
@@ -356,7 +326,7 @@ textarea {
     border-radius: 6px;
   }
 
-  .metric-grid {
+  .result-list {
     grid-template-columns: 1fr;
   }
 
