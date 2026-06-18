@@ -230,6 +230,36 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.traffic-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--surface-raised);
+}
+
+.traffic-panel strong {
+  color: var(--text-h);
+  font-size: 12px;
+}
+
+.traffic-panel span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.traffic-panel code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: transparent;
+  padding: 0;
+}
+
 .message-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -314,6 +344,10 @@ textarea {
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .traffic-panel {
+    grid-template-columns: 1fr;
   }
 }
 

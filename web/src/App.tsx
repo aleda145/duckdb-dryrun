@@ -4,9 +4,11 @@ import {
   DRYRUN_EXTENSION_VERSION,
   type DryrunRow,
   type EngineStatus,
+  type NetworkTrafficEvent,
   extractParquetPaths,
   getDryrunEngine,
   runDryrun,
+  subscribeNetworkTraffic,
 } from "./dryrunEngine";
 
 type Scenario = {
@@ -74,9 +76,7 @@ type QueryState = {
 };
 
 function App() {
-  const [selectedScenarioId, setSelectedScenarioId] = useState(
-    SCENARIOS[0].id,
-  );
+  const [selectedScenarioId, setSelectedScenarioId] = useState(SCENARIOS[0].id);
   const [sql, setSql] = useState(SCENARIOS[0].sql);
   const [engine, setEngine] = useState<EngineState>({
     ready: false,
@@ -89,6 +89,7 @@ function App() {
     result: null,
     parquetPath: null,
   });
+  const [trafficEvents, setTrafficEvents] = useState<NetworkTrafficEvent[]>([]);
   const runId = useRef(0);
 
   const selectedScenario = SCENARIOS.find(
@@ -98,6 +99,9 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
+    const unsubscribeTraffic = subscribeNetworkTraffic((event) => {
+      setTrafficEvents((previous) => [...previous, event].slice(-8));
+    });
 
     getDryrunEngine((status) => {
       if (!mounted) {
@@ -132,6 +136,7 @@ function App() {
 
     return () => {
       mounted = false;
+      unsubscribeTraffic();
     };
   }, []);
 
@@ -281,6 +286,8 @@ function App() {
         ) : (
           <EmptyPanel engineReady={engine.ready} />
         )}
+
+        <ParquetFooterReadPanel events={trafficEvents} />
       </section>
 
       <footer className="footer">
@@ -337,6 +344,29 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ParquetFooterReadPanel({ events }: { events: NetworkTrafficEvent[] }) {
+  const latestGet = events.findLast((event) => event.method === "GET");
+  const byteRange = latestGet?.range?.match(/^bytes=(\d+)-(\d+)$/);
+
+  return (
+    <div
+      className="traffic-panel"
+      aria-label="Parquet metadata network traffic"
+    >
+      <strong>Parquet footer read</strong>
+      <code>
+        {latestGet
+          ? `${formatBytes(latestGet.responseBytes)} (${
+              byteRange
+                ? `byte range: ${byteRange[1]} - ${byteRange[2]}`
+                : "byte range unknown"
+            })`
+          : "waiting for first Parquet footer request"}
+      </code>
     </div>
   );
 }
