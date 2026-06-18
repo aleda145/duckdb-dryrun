@@ -1,0 +1,356 @@
+.app-shell {
+  width: min(1180px, calc(100% - 24px));
+  margin: 0 auto;
+  padding: 12px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.hero {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+.hero h1 {
+  font-size: clamp(30px, 4.4vw, 48px);
+  line-height: 1;
+  font-weight: 780;
+}
+
+.scenario-section,
+.result-section {
+  width: 100%;
+}
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.scenario-card,
+.query-section,
+.result-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.scenario-card.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.scenario-button {
+  width: 100%;
+  border: 0;
+  padding: 7px 8px;
+  display: grid;
+  gap: 3px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scenario-button:focus-visible,
+textarea:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.scenario-button strong {
+  color: var(--text-h);
+  font-size: 15px;
+  line-height: 1.1;
+}
+
+.scenario-button > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.scenario-kicker {
+  color: var(--accent) !important;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.scenario-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 2px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+
+.meta {
+  padding: 4px 7px;
+}
+
+.meta + .meta {
+  border-left: 1px solid var(--border);
+}
+
+.meta span,
+.metric span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.meta strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-h);
+  font-size: 12px;
+}
+
+.query-section {
+  width: min(700px, 100%);
+  margin: 0 auto;
+  padding: 6px;
+}
+
+.duckdb-call {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.call-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 10px;
+  color: var(--code-text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.call-line code {
+  padding: 0;
+  color: var(--code-text);
+  background: transparent;
+}
+
+.call-line.end {
+  border-top: 1px solid color-mix(in srgb, var(--code-text) 12%, transparent);
+}
+
+textarea {
+  width: 100%;
+  height: 68px;
+  min-height: 68px;
+  max-height: 68px;
+  padding: 6px 10px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--code-text) 12%, transparent);
+  box-sizing: border-box;
+  resize: none;
+  outline: none;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font: 12px/1.35 var(--mono);
+  letter-spacing: 0;
+}
+
+.live-indicator {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--code-text) 18%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--code-text);
+  font: 11px/1.4 var(--sans);
+}
+
+.result-section {
+  padding: 8px;
+  display: grid;
+  gap: 7px;
+}
+
+.result-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.result-heading h2 {
+  font-size: 16px;
+}
+
+.result-heading p,
+.result-heading span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.result-heading span {
+  max-width: 56%;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.metric {
+  min-height: 50px;
+  padding: 7px 9px;
+  background: var(--surface-raised);
+  box-sizing: border-box;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-h);
+  font-size: 15px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.message-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--surface-raised);
+}
+
+.message-panel strong {
+  color: var(--text-h);
+}
+
+.message-panel p {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.message-panel.error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-raised));
+}
+
+.message-panel.loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.footer {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.footer a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .scenario-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .result-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .result-heading {
+    display: grid;
+  }
+
+  .result-heading span {
+    max-width: none;
+    text-align: left;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(100% - 16px, 1180px);
+    padding-top: 14px;
+  }
+
+  .scenario-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .query-section,
+  .result-section {
+    border-radius: 6px;
+  }
+
+  .scenario-meta,
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .meta + .meta {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  textarea {
+    height: 84px;
+    min-height: 84px;
+    max-height: 84px;
+    padding-inline: 16px;
+  }
+
+  .call-line {
+    padding-inline: 10px;
+  }
+
+}
