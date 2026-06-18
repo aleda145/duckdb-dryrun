@@ -130,9 +130,12 @@ textarea:focus {
 }
 
 .call-line code {
+  min-width: 0;
   padding: 0;
   color: var(--code-text);
   background: transparent;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .call-line.end {
@@ -313,7 +316,7 @@ textarea {
 
 @media (max-width: 640px) {
   .app-shell {
-    width: min(100% - 16px, 1180px);
+    width: calc(100% - 16px);
     padding-top: 14px;
   }
 
@@ -341,4 +344,24 @@ textarea {
     padding-inline: 10px;
   }
 
+  .scenario-button {
+    align-items: flex-start;
+  }
+
+  .scenario-copy strong {
+    white-space: normal;
+  }
+
+  .scenario-facts {
+    max-width: 38%;
+    white-space: normal;
+  }
+
+  .live-indicator {
+    flex: 0 0 auto;
+  }
+
+  .footer {
+    flex-wrap: wrap;
+  }
 }
