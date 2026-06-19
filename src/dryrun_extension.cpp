@@ -4,12 +4,23 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/comparison_expression.hpp"
+#include "duckdb/parser/expression/conjunction_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/star_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/parser/tableref/basetableref.hpp"
+#include "duckdb/parser/tableref/joinref.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -107,12 +118,6 @@ static string TrimCopy(string value) {
 	return value;
 }
 
-static bool EndsWithCI(const string &value, const string &suffix) {
-	auto lower_value = StringUtil::Lower(value);
-	auto lower_suffix = StringUtil::Lower(suffix);
-	return StringUtil::EndsWith(lower_value, lower_suffix);
-}
-
 static string UnquoteIdentifier(string value) {
 	value = TrimCopy(std::move(value));
 	if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
@@ -153,163 +158,173 @@ static string EscapeSQLString(const string &value) {
 	return result;
 }
 
-static vector<string> SplitTopLevel(const string &input, char delimiter) {
-	vector<string> result;
-	idx_t start = 0;
-	idx_t depth = 0;
-	bool in_single_quote = false;
-	bool in_double_quote = false;
-	for (idx_t i = 0; i < input.size(); i++) {
-		auto c = input[i];
-		if (in_single_quote) {
-			if (c == '\'' && i + 1 < input.size() && input[i + 1] == '\'') {
-				i++;
-			} else if (c == '\'') {
-				in_single_quote = false;
-			}
-			continue;
-		}
-		if (in_double_quote) {
-			if (c == '"' && i + 1 < input.size() && input[i + 1] == '"') {
-				i++;
-			} else if (c == '"') {
-				in_double_quote = false;
-			}
-			continue;
-		}
-		if (c == '\'') {
-			in_single_quote = true;
-		} else if (c == '"') {
-			in_double_quote = true;
-		} else if (c == '(') {
-			depth++;
-		} else if (c == ')' && depth > 0) {
-			depth--;
-		} else if (c == delimiter && depth == 0) {
-			result.push_back(TrimCopy(input.substr(start, i - start)));
-			start = i + 1;
-		}
+static void AddUniquePath(vector<string> &paths, const string &path) {
+	if (std::find(paths.begin(), paths.end(), path) == paths.end()) {
+		paths.push_back(path);
 	}
-	result.push_back(TrimCopy(input.substr(start)));
-	return result;
 }
 
-static optional_idx FindTopLevelKeyword(const string &input, const string &keyword, idx_t start_pos = 0) {
-	auto lower_input = StringUtil::Lower(input);
-	auto lower_keyword = StringUtil::Lower(keyword);
-	idx_t depth = 0;
-	bool in_single_quote = false;
-	bool in_double_quote = false;
-	for (idx_t i = start_pos; i + lower_keyword.size() <= lower_input.size(); i++) {
-		auto c = lower_input[i];
-		if (in_single_quote) {
-			if (c == '\'' && i + 1 < lower_input.size() && lower_input[i + 1] == '\'') {
-				i++;
-			} else if (c == '\'') {
-				in_single_quote = false;
-			}
-			continue;
+static void CollectPathValue(const Value &value, ParsedQueryInfo &result) {
+	if (value.IsNull()) {
+		return;
+	}
+	auto type_id = value.type().id();
+	if (type_id == LogicalTypeId::VARCHAR) {
+		auto path = value.GetValue<string>();
+		auto lower = StringUtil::Lower(path);
+		if (StringUtil::Contains(lower, ".parquet")) {
+			AddUniquePath(result.paths, path);
+		} else if (StringUtil::Contains(lower, ".csv") || StringUtil::Contains(lower, ".json")) {
+			throw BinderException("dryrun only supports Parquet scans in v1");
 		}
-		if (in_double_quote) {
-			if (c == '"' && i + 1 < lower_input.size() && lower_input[i + 1] == '"') {
-				i++;
-			} else if (c == '"') {
-				in_double_quote = false;
-			}
-			continue;
+		return;
+	}
+	if (type_id == LogicalTypeId::LIST) {
+		for (auto &child : ListValue::GetChildren(value)) {
+			CollectPathValue(child, result);
 		}
-		if (c == '\'') {
-			in_single_quote = true;
-			continue;
-		}
-		if (c == '"') {
-			in_double_quote = true;
-			continue;
-		}
-		if (c == '(') {
-			depth++;
-			continue;
-		}
-		if (c == ')' && depth > 0) {
-			depth--;
-			continue;
-		}
-		if (depth != 0 || lower_input.compare(i, lower_keyword.size(), lower_keyword) != 0) {
-			continue;
-		}
-		bool before_ok = i == 0 || !StringUtil::CharacterIsAlphaNumeric(lower_input[i - 1]);
-		auto after_pos = i + lower_keyword.size();
-		bool after_ok = after_pos == lower_input.size() || !StringUtil::CharacterIsAlphaNumeric(lower_input[after_pos]);
-		if (before_ok && after_ok) {
-			return optional_idx(i);
+		return;
+	}
+	if (type_id == LogicalTypeId::ARRAY) {
+		for (auto &child : ArrayValue::GetChildren(value)) {
+			CollectPathValue(child, result);
 		}
 	}
-	return optional_idx();
 }
 
-static vector<string> ExtractStringLiterals(const string &sql) {
-	vector<string> result;
-	for (idx_t i = 0; i < sql.size(); i++) {
-		if (sql[i] != '\'') {
-			continue;
-		}
-		string literal;
-		i++;
-		for (; i < sql.size(); i++) {
-			if (sql[i] == '\'' && i + 1 < sql.size() && sql[i + 1] == '\'') {
-				literal += '\'';
-				i++;
-			} else if (sql[i] == '\'') {
-				break;
-			} else {
-				literal += sql[i];
-			}
-		}
-		result.push_back(std::move(literal));
+static void CollectPathConstants(const ParsedExpression &expr, ParsedQueryInfo &result) {
+	ParsedExpressionIterator::VisitExpression<ConstantExpression>(
+	    expr, [&](const ConstantExpression &constant) { CollectPathValue(constant.value, result); });
+}
+
+static void CollectColumnRefs(const ParsedExpression &expr, unordered_set<string> &columns) {
+	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(expr, [&](const ColumnRefExpression &column_ref) {
+		columns.insert(NormalizeColumn(column_ref.GetColumnName()));
+	});
+}
+
+static bool IsTopLevelStar(const ParsedExpression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::STAR;
+}
+
+static void CollectTableFunctionPaths(const ParsedExpression &function_expr, ParsedQueryInfo &result) {
+	if (function_expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		result.notes.emplace_back("table function not analyzable");
+		return;
 	}
-	return result;
+	auto &function = function_expr.Cast<FunctionExpression>();
+	auto function_name = StringUtil::Lower(function.function_name);
+	if (function_name == "read_csv" || function_name == "read_json" || function_name == "read_csv_auto" ||
+	    function_name == "read_json_auto") {
+		throw BinderException("dryrun only supports Parquet scans in v1");
+	}
+	if (function_name != "read_parquet" && function_name != "parquet_scan") {
+		result.notes.emplace_back("table function not analyzable");
+		return;
+	}
+	for (auto &child : function.children) {
+		if (child) {
+			CollectPathConstants(*child, result);
+		}
+	}
 }
 
-static ProjectionInfo ExtractProjectionInfo(const string &sql, vector<string> &notes) {
+static void ExtractScanSources(const TableRef &ref, ParsedQueryInfo &result) {
+	switch (ref.type) {
+	case TableReferenceType::BASE_TABLE: {
+		auto &base = ref.Cast<BaseTableRef>();
+		auto lower_name = StringUtil::Lower(base.table_name);
+		if (StringUtil::Contains(lower_name, ".parquet")) {
+			AddUniquePath(result.paths, base.table_name);
+		} else if (StringUtil::Contains(lower_name, ".csv") || StringUtil::Contains(lower_name, ".json")) {
+			throw BinderException("dryrun only supports Parquet scans in v1");
+		} else {
+			result.notes.emplace_back("catalog table scan not analyzable in v1");
+		}
+		break;
+	}
+	case TableReferenceType::TABLE_FUNCTION: {
+		auto &table_function = ref.Cast<TableFunctionRef>();
+		if (!table_function.function) {
+			result.notes.emplace_back("table function not analyzable");
+			break;
+		}
+		CollectTableFunctionPaths(*table_function.function, result);
+		break;
+	}
+	case TableReferenceType::JOIN: {
+		auto &join_ref = ref.Cast<JoinRef>();
+		result.notes.emplace_back("join scan bytes estimated independently per Parquet leaf");
+		if (join_ref.left) {
+			ExtractScanSources(*join_ref.left, result);
+		}
+		if (join_ref.right) {
+			ExtractScanSources(*join_ref.right, result);
+		}
+		break;
+	}
+	case TableReferenceType::EMPTY_FROM:
+		break;
+	default:
+		result.notes.emplace_back("table reference not analyzable in v1");
+		break;
+	}
+}
+
+static ProjectionInfo ExtractProjectionInfo(const SelectNode &node, vector<string> &notes) {
 	ProjectionInfo result;
-	auto select_pos = FindTopLevelKeyword(sql, "select");
-	auto from_pos = FindTopLevelKeyword(sql, "from");
-	if (!select_pos.IsValid() || !from_pos.IsValid() || from_pos.GetIndex() <= select_pos.GetIndex()) {
-		notes.emplace_back("projection not analyzable, assumed all columns");
-		return result;
-	}
-
-	auto projection_text = sql.substr(select_pos.GetIndex() + 6, from_pos.GetIndex() - (select_pos.GetIndex() + 6));
-	projection_text = TrimCopy(std::move(projection_text));
-	if (projection_text == "*" || EndsWithCI(projection_text, ".*")) {
-		result.known = true;
-		result.all_columns = true;
-		return result;
-	}
-
-	auto expressions = SplitTopLevel(projection_text, ',');
 	result.known = true;
 	result.all_columns = false;
-	for (auto &expr : expressions) {
-		auto lower_expr = StringUtil::Lower(expr);
-		if (expr == "*" || EndsWithCI(expr, ".*") || StringUtil::Contains(expr, '(')) {
-			result.known = false;
+	for (auto &expr : node.select_list) {
+		if (!expr) {
+			continue;
+		}
+		if (IsTopLevelStar(*expr)) {
 			result.all_columns = true;
 			result.columns.clear();
-			notes.emplace_back("projection not analyzable, assumed all columns");
 			return result;
 		}
-
-		auto as_pos = FindTopLevelKeyword(expr, "as");
-		if (as_pos.IsValid()) {
-			expr = expr.substr(0, as_pos.GetIndex());
-		} else {
-			auto pieces = StringUtil::Split(expr, ' ');
-			if (pieces.size() > 1) {
-				expr = pieces[0];
+		CollectColumnRefs(*expr, result.columns);
+	}
+	if (!node.groups.group_expressions.empty()) {
+		notes.emplace_back("grouping expressions included in required columns with low confidence");
+		for (auto &expr : node.groups.group_expressions) {
+			if (expr) {
+				CollectColumnRefs(*expr, result.columns);
 			}
 		}
-		result.columns.insert(NormalizeColumn(expr));
+	}
+	if (node.having) {
+		notes.emplace_back("having expression included in required columns with low confidence");
+		CollectColumnRefs(*node.having, result.columns);
+	}
+	if (node.qualify) {
+		notes.emplace_back("qualify expression included in required columns with low confidence");
+		CollectColumnRefs(*node.qualify, result.columns);
+	}
+	for (auto &modifier : node.modifiers) {
+		if (!modifier) {
+			continue;
+		}
+		if (modifier->type == ResultModifierType::ORDER_MODIFIER) {
+			auto &order = modifier->Cast<OrderModifier>();
+			for (auto &order_node : order.orders) {
+				if (order_node.expression) {
+					CollectColumnRefs(*order_node.expression, result.columns);
+				}
+			}
+			notes.emplace_back("order expressions included in required columns with low confidence");
+		} else if (modifier->type == ResultModifierType::DISTINCT_MODIFIER) {
+			auto &distinct = modifier->Cast<DistinctModifier>();
+			for (auto &target : distinct.distinct_on_targets) {
+				if (target) {
+					CollectColumnRefs(*target, result.columns);
+				}
+			}
+			if (!distinct.distinct_on_targets.empty()) {
+				notes.emplace_back("distinct expressions included in required columns with low confidence");
+			}
+		}
 	}
 	return result;
 }
@@ -341,69 +356,105 @@ static string StripConstant(string value) {
 	return value;
 }
 
-static vector<Predicate> ExtractPredicates(const string &sql, bool &complex_filter, vector<string> &notes) {
-	vector<Predicate> result;
-	auto where_pos = FindTopLevelKeyword(sql, "where");
-	if (!where_pos.IsValid()) {
-		return result;
+static bool TryGetColumnName(const ParsedExpression &expr, string &column_name) {
+	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+		return false;
 	}
+	auto &column_ref = expr.Cast<ColumnRefExpression>();
+	column_name = NormalizeColumn(column_ref.GetColumnName());
+	return true;
+}
 
-	idx_t end_pos = sql.size();
-	for (auto &keyword : {"group", "order", "limit", "offset", "union", "except", "intersect"}) {
-		auto pos = FindTopLevelKeyword(sql, keyword, where_pos.GetIndex() + 5);
-		if (pos.IsValid()) {
-			end_pos = MinValue(end_pos, pos.GetIndex());
+static bool TryGetConstantValue(const ParsedExpression &expr, string &value) {
+	if (expr.GetExpressionClass() == ExpressionClass::CONSTANT) {
+		auto &constant = expr.Cast<ConstantExpression>();
+		value = StripConstant(constant.value.ToSQLString());
+		return true;
+	}
+	return false;
+}
+
+static string OperatorString(ExpressionType type) {
+	switch (type) {
+	case ExpressionType::COMPARE_EQUAL:
+		return "=";
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return ">";
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return ">=";
+	case ExpressionType::COMPARE_LESSTHAN:
+		return "<";
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return "<=";
+	default:
+		return "";
+	}
+}
+
+static string InvertOperator(const string &op) {
+	if (op == ">") {
+		return "<";
+	}
+	if (op == ">=") {
+		return "<=";
+	}
+	if (op == "<") {
+		return ">";
+	}
+	if (op == "<=") {
+		return ">=";
+	}
+	return op;
+}
+
+static bool TryExtractPredicate(const ParsedExpression &expr, Predicate &predicate) {
+	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
+		return false;
+	}
+	auto op = OperatorString(expr.GetExpressionType());
+	if (op.empty()) {
+		return false;
+	}
+	auto &comparison = expr.Cast<ComparisonExpression>();
+	if (!comparison.left || !comparison.right) {
+		return false;
+	}
+	string column_name;
+	string constant_value;
+	if (TryGetColumnName(*comparison.left, column_name) && TryGetConstantValue(*comparison.right, constant_value)) {
+		predicate.column = std::move(column_name);
+		predicate.op = std::move(op);
+		predicate.value = std::move(constant_value);
+		return true;
+	}
+	if (TryGetConstantValue(*comparison.left, constant_value) && TryGetColumnName(*comparison.right, column_name)) {
+		predicate.column = std::move(column_name);
+		predicate.op = InvertOperator(op);
+		predicate.value = std::move(constant_value);
+		return true;
+	}
+	return false;
+}
+
+static void ExtractPredicates(const ParsedExpression &expr, vector<Predicate> &predicates, bool &complex_filter,
+                              vector<string> &notes) {
+	if (expr.GetExpressionClass() == ExpressionClass::CONJUNCTION &&
+	    expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		auto &conjunction = expr.Cast<ConjunctionExpression>();
+		for (auto &child : conjunction.children) {
+			if (child) {
+				ExtractPredicates(*child, predicates, complex_filter, notes);
+			}
 		}
+		return;
 	}
-	auto where_text = TrimCopy(sql.substr(where_pos.GetIndex() + 5, end_pos - (where_pos.GetIndex() + 5)));
-	if (where_text.empty()) {
-		return result;
+	Predicate predicate;
+	if (TryExtractPredicate(expr, predicate)) {
+		predicates.push_back(std::move(predicate));
+		return;
 	}
-
-	if (FindTopLevelKeyword(where_text, "or").IsValid()) {
-		complex_filter = true;
-		notes.emplace_back("filter not analyzable, assumed all row groups");
-		return result;
-	}
-
-	static const std::regex predicate_regex(
-	    R"(^\s*((?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))?)\s*(=|>=|<=|>|<)\s*(.+?)\s*$)",
-	    std::regex::icase);
-
-	vector<string> parts;
-	idx_t start = 0;
-	while (true) {
-		auto and_pos = FindTopLevelKeyword(where_text, "and", start);
-		if (!and_pos.IsValid()) {
-			parts.push_back(TrimCopy(where_text.substr(start)));
-			break;
-		}
-		parts.push_back(TrimCopy(where_text.substr(start, and_pos.GetIndex() - start)));
-		start = and_pos.GetIndex() + 3;
-	}
-
-	for (auto &part : parts) {
-		std::smatch match;
-		if (!std::regex_match(part, match, predicate_regex)) {
-			complex_filter = true;
-			notes.emplace_back("filter not analyzable, assumed all row groups");
-			result.clear();
-			return result;
-		}
-		Predicate predicate;
-		predicate.column = NormalizeColumn(match[1].str());
-		predicate.op = match[2].str();
-		auto constant = TrimCopy(match[3].str());
-		if (StringUtil::Contains(constant, '(') || StringUtil::Contains(constant, ')')) {
-			complex_filter = true;
-			notes.emplace_back("filter not analyzable, assumed all row groups");
-			result.clear();
-			return result;
-		}
-		predicate.value = StripConstant(std::move(constant));
-		result.push_back(std::move(predicate));
-	}
-	return result;
+	complex_filter = true;
+	notes.emplace_back("filter not analyzable, assumed all row groups");
 }
 
 static ParsedQueryInfo ParseDryrunQuery(ClientContext &context, const string &sql) {
@@ -417,13 +468,13 @@ static ParsedQueryInfo ParseDryrunQuery(ClientContext &context, const string &sq
 	}
 
 	ParsedQueryInfo result;
-	for (auto &literal : ExtractStringLiterals(sql)) {
-		auto lower = StringUtil::Lower(literal);
-		if (StringUtil::Contains(lower, ".parquet")) {
-			result.paths.push_back(literal);
-		} else if (StringUtil::Contains(lower, ".csv") || StringUtil::Contains(lower, ".json")) {
-			throw BinderException("dryrun only supports Parquet scans in v1");
-		}
+	auto &statement = parser.statements[0]->Cast<SelectStatement>();
+	if (!statement.node || statement.node->type != QueryNodeType::SELECT_NODE) {
+		throw BinderException("dryrun could not analyze this query shape in v1");
+	}
+	auto &node = statement.node->Cast<SelectNode>();
+	if (node.from_table) {
+		ExtractScanSources(*node.from_table, result);
 	}
 	if (result.paths.empty()) {
 		auto lower_sql = StringUtil::Lower(sql);
@@ -433,8 +484,11 @@ static ParsedQueryInfo ParseDryrunQuery(ClientContext &context, const string &sq
 		throw BinderException("dryrun v1 requires Parquet file paths in the query text");
 	}
 
-	result.projection = ExtractProjectionInfo(sql, result.notes);
-	result.predicates = ExtractPredicates(sql, result.complex_filter, result.notes);
+	result.projection = ExtractProjectionInfo(node, result.notes);
+	if (node.where_clause) {
+		CollectColumnRefs(*node.where_clause, result.projection.columns);
+		ExtractPredicates(*node.where_clause, result.predicates, result.complex_filter, result.notes);
+	}
 	return result;
 }
 
@@ -447,7 +501,9 @@ static bool TryParseDouble(const string &value, double &result) {
 static int CompareStatsValue(const string &left, const string &right, bool &comparable) {
 	double left_double;
 	double right_double;
-	if (TryParseDouble(left, left_double) && TryParseDouble(right, right_double)) {
+	auto left_is_double = TryParseDouble(left, left_double);
+	auto right_is_double = TryParseDouble(right, right_double);
+	if (left_is_double && right_is_double) {
 		comparable = true;
 		if (left_double < right_double) {
 			return -1;
@@ -455,6 +511,10 @@ static int CompareStatsValue(const string &left, const string &right, bool &comp
 		if (left_double > right_double) {
 			return 1;
 		}
+		return 0;
+	}
+	if (left_is_double != right_is_double) {
+		comparable = false;
 		return 0;
 	}
 	comparable = true;
@@ -534,6 +594,8 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 		estimate.confidence = "low";
 	} else if (!parsed.predicates.empty()) {
 		estimate.confidence = "medium";
+	} else if (!estimate.notes.empty()) {
+		estimate.confidence = "low";
 	}
 
 	unordered_map<RowGroupKey, RowGroupEstimate, RowGroupKeyHash> row_groups;

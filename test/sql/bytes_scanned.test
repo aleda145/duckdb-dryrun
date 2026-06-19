@@ -105,6 +105,25 @@ FROM filtered, projected;
 ----
 true	true	medium
 
+# A filter column that is not projected is still required for the scan estimate.
+query IIT
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE PULocationID = 132')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
+	WHERE path_in_schema IN ('PULocationID', 'fare_amount')
+), projected AS (
+	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet''')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_compressed_bytes > projected.estimated_compressed_bytes,
+	estimate.confidence
+FROM estimate, metadata, projected;
+----
+true	true	medium
+
 # LIMIT does not reduce Parquet column-chunk bytes.
 query IIT
 WITH limited AS (
@@ -120,35 +139,76 @@ FROM limited, projected;
 ----
 true	true	high
 
-# Complex filters fall back to unfiltered projection bytes with low confidence.
+# Complex filters still scan referenced filter columns, but do not claim pruning.
 query IIT
 WITH complex_filter AS (
-	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE abs(PULocationID) = 132')
-), projected AS (
-	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
+	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE abs(PULocationID) = 132')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
+	WHERE path_in_schema IN ('PULocationID', 'fare_amount')
 )
 SELECT
-	complex_filter.estimated_compressed_bytes = projected.estimated_compressed_bytes,
+	complex_filter.estimated_compressed_bytes = metadata.compressed_bytes,
 	complex_filter.notes LIKE '%filter not analyzable%',
 	complex_filter.confidence
-FROM complex_filter, projected;
+FROM complex_filter, metadata;
 ----
 true	true	low
 
-# Non-trivial projections that are not yet analyzable fall back to all columns.
+# COUNT(*) does not require Parquet data columns.
 query IIT
-WITH count_fallback AS (
+WITH count_estimate AS (
 	SELECT * FROM dryrun('SELECT count(*) FROM ''data/yellow_tripdata_2020-04.parquet''')
+)
+SELECT
+	count_estimate.estimated_compressed_bytes,
+	count_estimate.estimated_uncompressed_bytes,
+	count_estimate.confidence
+FROM count_estimate;
+----
+0	0	high
+
+# COUNT(column), SUM(column), and expression projections use referenced columns.
+query IIT
+WITH aggregate_estimate AS (
+	SELECT * FROM dryrun('SELECT count(PULocationID), sum(fare_amount), fare_amount + tip_amount FROM ''data/yellow_tripdata_2020-04.parquet''')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
+	WHERE path_in_schema IN ('PULocationID', 'fare_amount', 'tip_amount')
 ), full_scan AS (
 	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	count_fallback.estimated_compressed_bytes = full_scan.estimated_compressed_bytes,
-	count_fallback.notes LIKE '%projection not analyzable%',
-	count_fallback.confidence
-FROM count_fallback, full_scan;
+	aggregate_estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	aggregate_estimate.estimated_compressed_bytes < full_scan.estimated_compressed_bytes,
+	aggregate_estimate.confidence
+FROM aggregate_estimate, metadata, full_scan;
 ----
-true	true	low
+true	true	high
+
+# String literals containing .parquet outside scan sources are not scans.
+statement error
+SELECT * FROM dryrun('SELECT ''data/yellow_tripdata_2020-04.parquet'' AS literal_only');
+----
+Binder Error: dryrun v1 requires Parquet file paths in the query text
+
+# Filter constants containing .parquet do not add extra scan sources.
+query II
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE VendorID = ''data/so_database.parquet''')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
+	WHERE path_in_schema IN ('PULocationID', 'VendorID')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_files
+FROM estimate, metadata;
+----
+true	1
 
 # Profiling bytes: execute the target queries after dryrun and extract DuckDB's
 # reported total_bytes_read from the profiling JSON files.
