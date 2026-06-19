@@ -23,6 +23,7 @@ REMOTE_TITANIC = "https://assets.kavla.dev/demo/titanic.parquet"
 REMOTE_PROPERTIES = "https://data.bostadsbussen.se/properties.parquet"
 REMOTE_GAIA = "https://dryrun-data.dahl.dev/gaia-5m.parquet"
 REMOTE_YELLOW_2022_PREFIX = "https://dryrun-data.dahl.dev/yellow_tripdata_2022"
+REMOTE_TAXI_ZONES = "https://dryrun-data.dahl.dev/taxi_zone_lookup.parquet"
 
 
 @dataclass(frozen=True)
@@ -329,6 +330,75 @@ def default_cases() -> list[BenchmarkCase]:
             (
                 f"SELECT VendorID FROM '{sql_string(yellow_jan)}' "
                 f"UNION ALL SELECT VendorID FROM '{sql_string(yellow_feb)}'"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_zone_left_count_keys_only",
+            (yellow_jan, REMOTE_TAXI_ZONES),
+            (
+                f"SELECT count(*) "
+                f"FROM '{sql_string(yellow_jan)}' t "
+                f"LEFT JOIN '{sql_string(REMOTE_TAXI_ZONES)}' z "
+                f"ON t.PULocationID = z.LocationID"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_zone_left_payload",
+            (yellow_jan, REMOTE_TAXI_ZONES),
+            (
+                f"SELECT t.VendorID, t.tpep_pickup_datetime, t.trip_distance, "
+                f"t.fare_amount, z.Borough, z.Zone "
+                f"FROM '{sql_string(yellow_jan)}' t "
+                f"LEFT JOIN '{sql_string(REMOTE_TAXI_ZONES)}' z "
+                f"ON t.PULocationID = z.LocationID"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_zone_pickup_dropoff_left",
+            (yellow_jan, REMOTE_TAXI_ZONES),
+            (
+                f"SELECT t.VendorID, t.tpep_pickup_datetime, t.trip_distance, "
+                f"t.fare_amount, pickup.Borough AS pickup_borough, "
+                f"pickup.Zone AS pickup_zone, dropoff.Borough AS dropoff_borough, "
+                f"dropoff.Zone AS dropoff_zone "
+                f"FROM '{sql_string(yellow_jan)}' t "
+                f"LEFT JOIN '{sql_string(REMOTE_TAXI_ZONES)}' pickup "
+                f"ON t.PULocationID = pickup.LocationID "
+                f"LEFT JOIN '{sql_string(REMOTE_TAXI_ZONES)}' dropoff "
+                f"ON t.DOLocationID = dropoff.LocationID"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_zone_fact_filter",
+            (yellow_jan, REMOTE_TAXI_ZONES),
+            (
+                f"SELECT t.fare_amount, z.Zone "
+                f"FROM '{sql_string(yellow_jan)}' t "
+                f"LEFT JOIN '{sql_string(REMOTE_TAXI_ZONES)}' z "
+                f"ON t.PULocationID = z.LocationID "
+                f"WHERE t.PULocationID = 132"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_zone_dim_filter",
+            (yellow_jan, REMOTE_TAXI_ZONES),
+            (
+                f"SELECT t.fare_amount, z.Zone "
+                f"FROM '{sql_string(yellow_jan)}' t "
+                f"JOIN '{sql_string(REMOTE_TAXI_ZONES)}' z "
+                f"ON t.PULocationID = z.LocationID "
+                f"WHERE z.Borough = 'Manhattan'"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_zone_group_by_borough",
+            (yellow_jan, REMOTE_TAXI_ZONES),
+            (
+                f"SELECT z.Borough, count(*) AS trips, sum(t.fare_amount) AS fare_total "
+                f"FROM '{sql_string(yellow_jan)}' t "
+                f"LEFT JOIN '{sql_string(REMOTE_TAXI_ZONES)}' z "
+                f"ON t.PULocationID = z.LocationID "
+                f"GROUP BY z.Borough"
             ),
         ),
     ]
