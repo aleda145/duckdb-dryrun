@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./App.css";
 import {
   DRYRUN_EXTENSION_VERSION,
@@ -98,6 +98,7 @@ function App() {
     parquetPath: null,
   });
   const runId = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const selectedScenario = SCENARIOS.find(
     (scenario) => scenario.id === selectedScenarioId,
@@ -105,6 +106,16 @@ function App() {
   const latestResult = query.result;
   const displayParquetPath =
     query.parquetPath ?? extractParquetPaths(sql)[0] ?? GAIA_PATH;
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [sql]);
 
   useEffect(() => {
     let mounted = true;
@@ -247,6 +258,7 @@ function App() {
             <code>SELECT * FROM dryrun(&apos;</code>
           </div>
           <textarea
+            ref={textareaRef}
             value={sql}
             onChange={(event) => {
               setSelectedScenarioId("custom");
