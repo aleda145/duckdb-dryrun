@@ -17,6 +17,7 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/query_node/set_operation_node.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
@@ -158,6 +159,19 @@ static string EscapeSQLString(const string &value) {
 	return result;
 }
 
+static bool IsHttpGlob(const string &path) {
+	auto lower = StringUtil::Lower(path);
+	return (StringUtil::StartsWith(lower, "http://") || StringUtil::StartsWith(lower, "https://")) &&
+	       StringUtil::Contains(path, "*");
+}
+
+static void RejectHttpGlob(const string &path) {
+	if (IsHttpGlob(path)) {
+		throw BinderException(
+		    "dryrun does not support HTTP/HTTPS globbing; use explicit file URLs or read_parquet([...])");
+	}
+}
+
 static void AddUniquePath(vector<string> &paths, const string &path) {
 	if (std::find(paths.begin(), paths.end(), path) == paths.end()) {
 		paths.push_back(path);
@@ -173,6 +187,7 @@ static void CollectPathValue(const Value &value, ParsedQueryInfo &result) {
 		auto path = value.GetValue<string>();
 		auto lower = StringUtil::Lower(path);
 		if (StringUtil::Contains(lower, ".parquet")) {
+			RejectHttpGlob(path);
 			AddUniquePath(result.paths, path);
 		} else if (StringUtil::Contains(lower, ".csv") || StringUtil::Contains(lower, ".json")) {
 			throw BinderException("dryrun only supports Parquet scans in v1");
@@ -235,6 +250,7 @@ static void ExtractScanSources(const TableRef &ref, ParsedQueryInfo &result) {
 		auto &base = ref.Cast<BaseTableRef>();
 		auto lower_name = StringUtil::Lower(base.table_name);
 		if (StringUtil::Contains(lower_name, ".parquet")) {
+			RejectHttpGlob(base.table_name);
 			AddUniquePath(result.paths, base.table_name);
 		} else if (StringUtil::Contains(lower_name, ".csv") || StringUtil::Contains(lower_name, ".json")) {
 			throw BinderException("dryrun only supports Parquet scans in v1");
@@ -327,6 +343,27 @@ static ProjectionInfo ExtractProjectionInfo(const SelectNode &node, vector<strin
 		}
 	}
 	return result;
+}
+
+static void MergeProjectionInfo(ProjectionInfo &target, const ProjectionInfo &source) {
+	if (!source.known) {
+		target.known = false;
+		target.all_columns = true;
+		target.columns.clear();
+		return;
+	}
+	if (!target.known) {
+		target = source;
+		return;
+	}
+	if (target.all_columns || source.all_columns) {
+		target.all_columns = true;
+		target.columns.clear();
+		return;
+	}
+	for (auto &column : source.columns) {
+		target.columns.insert(column);
+	}
 }
 
 static string StripConstant(string value) {
@@ -457,6 +494,40 @@ static void ExtractPredicates(const ParsedExpression &expr, vector<Predicate> &p
 	notes.emplace_back("filter not analyzable, assumed all row groups");
 }
 
+static void AnalyzeSelectNode(const SelectNode &node, ParsedQueryInfo &result, bool collect_predicates) {
+	if (node.from_table) {
+		ExtractScanSources(*node.from_table, result);
+	}
+	auto projection = ExtractProjectionInfo(node, result.notes);
+	if (node.where_clause) {
+		CollectColumnRefs(*node.where_clause, projection.columns);
+		if (collect_predicates) {
+			ExtractPredicates(*node.where_clause, result.predicates, result.complex_filter, result.notes);
+		}
+	}
+	MergeProjectionInfo(result.projection, projection);
+}
+
+static void AnalyzeQueryNode(const QueryNode &node, ParsedQueryInfo &result, bool inside_set_operation = false) {
+	switch (node.type) {
+	case QueryNodeType::SELECT_NODE:
+		AnalyzeSelectNode(node.Cast<SelectNode>(), result, !inside_set_operation);
+		break;
+	case QueryNodeType::SET_OPERATION_NODE: {
+		auto &set_operation = node.Cast<SetOperationNode>();
+		result.notes.emplace_back("set operation scan bytes estimated as sum of Parquet leaf scans");
+		for (auto &child : set_operation.children) {
+			if (child) {
+				AnalyzeQueryNode(*child, result, true);
+			}
+		}
+		break;
+	}
+	default:
+		throw BinderException("dryrun could not analyze this query shape in v1");
+	}
+}
+
 static ParsedQueryInfo ParseDryrunQuery(ClientContext &context, const string &sql) {
 	Parser parser(context.GetParserOptions());
 	parser.ParseQuery(sql);
@@ -469,25 +540,16 @@ static ParsedQueryInfo ParseDryrunQuery(ClientContext &context, const string &sq
 
 	ParsedQueryInfo result;
 	auto &statement = parser.statements[0]->Cast<SelectStatement>();
-	if (!statement.node || statement.node->type != QueryNodeType::SELECT_NODE) {
+	if (!statement.node) {
 		throw BinderException("dryrun could not analyze this query shape in v1");
 	}
-	auto &node = statement.node->Cast<SelectNode>();
-	if (node.from_table) {
-		ExtractScanSources(*node.from_table, result);
-	}
+	AnalyzeQueryNode(*statement.node, result);
 	if (result.paths.empty()) {
 		auto lower_sql = StringUtil::Lower(sql);
 		if (StringUtil::Contains(lower_sql, "read_csv") || StringUtil::Contains(lower_sql, "read_json")) {
 			throw BinderException("dryrun only supports Parquet scans in v1");
 		}
 		throw BinderException("dryrun v1 requires Parquet file paths in the query text");
-	}
-
-	result.projection = ExtractProjectionInfo(node, result.notes);
-	if (node.where_clause) {
-		CollectColumnRefs(*node.where_clause, result.projection.columns);
-		ExtractPredicates(*node.where_clause, result.predicates, result.complex_filter, result.notes);
 	}
 	return result;
 }

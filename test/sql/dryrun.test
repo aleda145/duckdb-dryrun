@@ -56,6 +56,12 @@ FROM dryrun('SELECT * FROM read_parquet(''{TEMP_DIR}/dryrun_events_*.parquet'')'
 ----
 2	true
 
+# Generic HTTP/HTTPS does not provide file listing for glob expansion.
+statement error
+SELECT * FROM dryrun('SELECT * FROM ''https://dryrun-data.dahl.dev/yellow_tripdata_2022-0*.parquet''');
+----
+Binder Error: dryrun does not support HTTP/HTTPS globbing; use explicit file URLs or read_parquet([...])
+
 # Simple filter should prune at least one row group.
 query IT
 SELECT filtered.estimated_row_groups < full_scan.estimated_row_groups, filtered.confidence

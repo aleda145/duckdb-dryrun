@@ -210,6 +210,38 @@ FROM estimate, metadata;
 ----
 true	1
 
+# UNION ALL over Parquet scans should be analyzable.
+query IIT
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet'' UNION ALL SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
+), projected AS (
+	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
+)
+SELECT
+	estimate.estimated_compressed_bytes = projected.estimated_compressed_bytes,
+	estimate.notes LIKE '%set operation%',
+	estimate.confidence
+FROM estimate, projected;
+----
+true	true	low
+
+# UNION ALL branch filters should include filter columns but avoid global pruning.
+query IIT
+WITH estimate AS (
+	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE PULocationID = 132 UNION ALL SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE PULocationID = 133')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
+	WHERE path_in_schema IN ('PULocationID', 'fare_amount')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.notes LIKE '%set operation%',
+	estimate.confidence
+FROM estimate, metadata;
+----
+true	true	low
+
 # Profiling bytes: execute the target queries after dryrun and extract DuckDB's
 # reported total_bytes_read from the profiling JSON files.
 

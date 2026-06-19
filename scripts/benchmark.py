@@ -57,7 +57,7 @@ def startswith_at(value: str, index: int, prefixes: tuple[str, ...]) -> bool:
 
 def scan_url(value: str, index: int) -> tuple[str, int]:
     end = index
-    while end < len(value) and not value[end].isspace() and value[end] not in ",);":
+    while end < len(value) and not value[end].isspace() and value[end] not in "'\",);]":
         end += 1
     return value[index:end], end
 
@@ -220,7 +220,10 @@ def format_ratio(numerator: int | float | None, denominator: int | float | None)
 
 def concise_error(exc: Exception) -> str:
     lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
-    for prefix in ("Binder Error:", "Catalog Error:", "HTTP Error:", "IO Error:", "Parser Error:"):
+    message = "\n".join(lines)
+    if "Globs" in message and "generic HTTP" in message:
+        return "HTTP/HTTPS globbing is not supported; use explicit file URLs or read_parquet([...])"
+    for prefix in ("Binder Error:", "Catalog Error:", "HTTP Error:", "Invalid Input Error:", "IO Error:", "Parser Error:"):
         for line in lines:
             if prefix in line:
                 return line
@@ -311,9 +314,14 @@ def default_cases() -> list[BenchmarkCase]:
             f"SELECT fare_amount FROM read_parquet({sql_list(yellow_urls)}) WHERE abs(PULocationID) = 132",
         ),
         BenchmarkCase(
-            "yellow_2022_http_glob_attempt",
-            (f"{REMOTE_YELLOW_2022_PREFIX}-*.parquet",),
-            f"SELECT count(*) FROM read_parquet('{sql_string(REMOTE_YELLOW_2022_PREFIX)}-*.parquet')",
+            "yellow_2022_jan_feb_list_filter",
+            (yellow_jan, yellow_feb),
+            f"SELECT VendorID, fare_amount FROM read_parquet({sql_list((yellow_jan, yellow_feb))}) WHERE VendorID = 1",
+        ),
+        BenchmarkCase(
+            "yellow_2022_http_glob_count",
+            (f"{REMOTE_YELLOW_2022_PREFIX}-0*.parquet",),
+            f"SELECT count(*) FROM '{sql_string(REMOTE_YELLOW_2022_PREFIX)}-0*.parquet'",
         ),
         BenchmarkCase(
             "yellow_2022_union_months",
