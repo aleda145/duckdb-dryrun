@@ -198,12 +198,12 @@ def profile(case: BenchmarkCase, db: Path, temp_dir: Path) -> dict[str, Any]:
         quiet=True,
     )
     if not profile_path.exists():
-        return {"total_bytes_read": 0, "profile_missing": True}
+        return {"total_bytes_read": None, "profile_missing": True}
     return json.loads(profile_path.read_text())
 
 
-def format_ratio(numerator: int | float, denominator: int | float) -> str:
-    if denominator == 0:
+def format_ratio(numerator: int | float | None, denominator: int | float) -> str:
+    if numerator is None or denominator == 0:
         return "n/a"
     return f"{numerator / denominator:.3f}x"
 
@@ -315,14 +315,15 @@ def main() -> int:
             estimate = dryrun(case.query, db)
             profile_data = profile(case, db, temp_dir)
             dryrun_bytes = int(estimate["estimated_compressed_bytes"])
-            profiled_bytes = int(profile_data["total_bytes_read"])
+            profiled_value = profile_data["total_bytes_read"]
+            profiled_bytes = None if profiled_value is None else int(profiled_value)
             if profile_data.get("profile_missing"):
                 missing_profiles.append(case.name)
             rows.append(
                 [
                     case.name,
                     dryrun_bytes,
-                    profiled_bytes,
+                    "missing" if profiled_bytes is None else profiled_bytes,
                     format_ratio(profiled_bytes, dryrun_bytes),
                     estimate["confidence"],
                 ]
@@ -346,7 +347,7 @@ def main() -> int:
             print()
             print("notes:")
             for name in missing_profiles:
-                print(f"- {name}: DuckDB did not emit profiling JSON; treated profiled_bytes as 0")
+                print(f"- {name}: DuckDB did not emit profiling JSON; profiled_bytes is missing")
         return 0
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
