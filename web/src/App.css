@@ -92,12 +92,6 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.scenario-kicker {
-  color: var(--accent) !important;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
 .metric span {
   display: block;
   color: var(--text-muted);

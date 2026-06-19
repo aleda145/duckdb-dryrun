@@ -14,51 +14,61 @@ import {
 type Scenario = {
   id: string;
   title: string;
-  summary: string;
-  rows: string;
-  fileSize: string;
+  primaryFact: string;
+  secondaryFact: string;
   sql: string;
 };
 
 const GAIA_PATH = "https://dryrun-data.dahl.dev/gaia-5m.parquet";
+const YELLOW_2022_PREFIX =
+  "https://dryrun-data.dahl.dev/yellow_tripdata_2022";
+const TAXI_ZONES_PATH =
+  "https://dryrun-data.dahl.dev/taxi_zone_lookup.parquet";
+const YELLOW_2022_PATHS = Array.from(
+  { length: 12 },
+  (_, index) =>
+    `${YELLOW_2022_PREFIX}-${String(index + 1).padStart(2, "0")}.parquet`,
+);
+const YELLOW_2022_SQL_LIST = `[${YELLOW_2022_PATHS.map(
+  (path) => `'${path}'`,
+).join(", ")}]`;
 
 const SCENARIOS: Scenario[] = [
   {
-    id: "filter-b",
-    title: "Filter column",
-    summary: "b = 1",
-    rows: "5M",
-    fileSize: "93.2 MB",
-    sql: `SELECT b
+    id: "gaia-filter",
+    title: "Gaia filter",
+    primaryFact: "1 file",
+    secondaryFact: "93.2 MB",
+    sql: `SELECT count(*)
 FROM '${GAIA_PATH}'
 WHERE b = 1;`,
   },
   {
-    id: "count-all",
-    title: "Count rows",
-    summary: "count(*)",
-    rows: "5M",
-    fileSize: "93.2 MB",
-    sql: `SELECT count(*)
-FROM '${GAIA_PATH}';`,
-  },
-  {
-    id: "project-b",
-    title: "Project one",
-    summary: "SELECT b",
-    rows: "5M",
-    fileSize: "93.2 MB",
-    sql: `SELECT b
-FROM '${GAIA_PATH}';`,
-  },
-  {
-    id: "full-scan",
-    title: "Full scan",
-    summary: "SELECT *",
-    rows: "5M",
-    fileSize: "93.2 MB",
+    id: "nyc-taxi-january",
+    title: "NYC taxi January",
+    primaryFact: "1 file",
+    secondaryFact: "38.14 MB",
     sql: `SELECT *
-FROM '${GAIA_PATH}';`,
+FROM '${YELLOW_2022_PATHS[0]}';`,
+  },
+  {
+    id: "nyc-taxi-2022",
+    title: "NYC taxi 2022",
+    primaryFact: "12 files",
+    secondaryFact: "615.11 MB",
+    sql: `SELECT VendorID, passenger_count, trip_distance, fare_amount
+FROM read_parquet(${YELLOW_2022_SQL_LIST});`,
+  },
+  {
+    id: "nyc-taxi-zone-join",
+    title: "NYC taxi zone join",
+    primaryFact: "2 files",
+    secondaryFact: "38.15 MB",
+    sql: `SELECT t.fare_amount, z.Zone
+FROM '${YELLOW_2022_PATHS[0]}' t
+JOIN '${TAXI_ZONES_PATH}' z
+ON t.PULocationID = z.LocationID
+WHERE z.Borough = 'Manhattan';`,
   },
 ];
 
@@ -96,6 +106,8 @@ function App() {
     (scenario) => scenario.id === selectedScenarioId,
   );
   const latestResult = query.result;
+  const displayParquetPath =
+    query.parquetPath ?? extractParquetPaths(sql)[0] ?? GAIA_PATH;
 
   useEffect(() => {
     let mounted = true;
@@ -266,7 +278,7 @@ function App() {
             <h2>Dry run result</h2>
             <p>{selectedScenario?.title ?? "Custom SQL"}</p>
           </div>
-          <span>{query.parquetPath ?? GAIA_PATH}</span>
+          <span>{displayParquetPath}</span>
         </div>
 
         {!engine.ready ? (
@@ -309,12 +321,11 @@ function ScenarioCard({
     <article className={active ? "scenario-card active" : "scenario-card"}>
       <button type="button" className="scenario-button" onClick={onSelect}>
         <span className="scenario-copy">
-          <span className="scenario-kicker">Gaia 5M</span>
           <strong>{scenario.title}</strong>
         </span>
         <span className="scenario-facts">
-          <span>{scenario.rows} rows</span>
-          <span>{scenario.fileSize}</span>
+          <span>{scenario.primaryFact}</span>
+          <span>{scenario.secondaryFact}</span>
         </span>
       </button>
     </article>
