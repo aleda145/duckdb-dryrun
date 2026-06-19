@@ -21,6 +21,8 @@ DRYRUN_EXTENSION = ROOT / "build" / "release" / "extension" / "dryrun" / "dryrun
 EXTENSION_DIRECTORY = Path("/tmp/duckdb-dryrun-extensions")
 REMOTE_TITANIC = "https://assets.kavla.dev/demo/titanic.parquet"
 REMOTE_PROPERTIES = "https://data.bostadsbussen.se/properties.parquet"
+REMOTE_GAIA = "https://dryrun-data.dahl.dev/gaia-5m.parquet"
+REMOTE_YELLOW_2022_PREFIX = "https://dryrun-data.dahl.dev/yellow_tripdata_2022"
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,14 @@ class BenchmarkCase:
 
 def sql_string(value: str | Path) -> str:
     return str(value).replace("'", "''")
+
+
+def sql_list(values: tuple[str, ...]) -> str:
+    return "[" + ", ".join(f"'{sql_string(value)}'" for value in values) + "]"
+
+
+def yellow_2022_urls() -> tuple[str, ...]:
+    return tuple(f"{REMOTE_YELLOW_2022_PREFIX}-{month:02d}.parquet" for month in range(1, 13))
 
 
 def strip_trailing_semicolon(query: str) -> str:
@@ -202,10 +212,19 @@ def profile(case: BenchmarkCase, db: Path, temp_dir: Path) -> dict[str, Any]:
     return json.loads(profile_path.read_text())
 
 
-def format_ratio(numerator: int | float | None, denominator: int | float) -> str:
-    if numerator is None or denominator == 0:
+def format_ratio(numerator: int | float | None, denominator: int | float | None) -> str:
+    if numerator is None or denominator is None or denominator == 0:
         return "n/a"
     return f"{numerator / denominator:.3f}x"
+
+
+def concise_error(exc: Exception) -> str:
+    lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+    for prefix in ("Binder Error:", "Catalog Error:", "HTTP Error:", "IO Error:", "Parser Error:"):
+        for line in lines:
+            if prefix in line:
+                return line
+    return lines[-1] if lines else type(exc).__name__
 
 
 def print_table(headers: list[str], rows: list[list[Any]]) -> None:
@@ -218,6 +237,9 @@ def print_table(headers: list[str], rows: list[list[Any]]) -> None:
 
 
 def default_cases() -> list[BenchmarkCase]:
+    yellow_urls = yellow_2022_urls()
+    yellow_jan = yellow_urls[0]
+    yellow_feb = yellow_urls[1]
     return [
         BenchmarkCase("titanic_full", (REMOTE_TITANIC,), f"SELECT * FROM '{sql_string(REMOTE_TITANIC)}'"),
         BenchmarkCase(
@@ -225,11 +247,81 @@ def default_cases() -> list[BenchmarkCase]:
             (REMOTE_TITANIC,),
             f"SELECT PassengerId FROM '{sql_string(REMOTE_TITANIC)}'",
         ),
+        BenchmarkCase(
+            "titanic_self_join",
+            (REMOTE_TITANIC,),
+            (
+                f"SELECT count(*) FROM '{sql_string(REMOTE_TITANIC)}' a "
+                f"JOIN '{sql_string(REMOTE_TITANIC)}' b ON a.PassengerId = b.PassengerId"
+            ),
+        ),
         BenchmarkCase("properties_full", (REMOTE_PROPERTIES,), f"SELECT * FROM '{sql_string(REMOTE_PROPERTIES)}'"),
         BenchmarkCase(
             "properties_price",
             (REMOTE_PROPERTIES,),
             f"SELECT price FROM '{sql_string(REMOTE_PROPERTIES)}'",
+        ),
+        BenchmarkCase("gaia_full", (REMOTE_GAIA,), f"SELECT * FROM '{sql_string(REMOTE_GAIA)}'"),
+        BenchmarkCase("gaia_count", (REMOTE_GAIA,), f"SELECT count(*) FROM '{sql_string(REMOTE_GAIA)}'"),
+        BenchmarkCase("gaia_b", (REMOTE_GAIA,), f"SELECT b FROM '{sql_string(REMOTE_GAIA)}'"),
+        BenchmarkCase(
+            "gaia_multi_column_expr",
+            (REMOTE_GAIA,),
+            f"SELECT b, b + 1 AS b_plus_one FROM '{sql_string(REMOTE_GAIA)}'",
+        ),
+        BenchmarkCase(
+            "gaia_count_b_eq_1",
+            (REMOTE_GAIA,),
+            f"SELECT count(*) FROM '{sql_string(REMOTE_GAIA)}' WHERE b = 1",
+        ),
+        BenchmarkCase(
+            "gaia_abs_b_eq_1",
+            (REMOTE_GAIA,),
+            f"SELECT b FROM '{sql_string(REMOTE_GAIA)}' WHERE abs(b) = 1",
+        ),
+        BenchmarkCase(
+            "gaia_union_b_filters",
+            (REMOTE_GAIA,),
+            (
+                f"SELECT b FROM '{sql_string(REMOTE_GAIA)}' WHERE b = 1 "
+                f"UNION ALL SELECT b FROM '{sql_string(REMOTE_GAIA)}' WHERE b = 2"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_2022_full_list",
+            yellow_urls,
+            f"SELECT * FROM read_parquet({sql_list(yellow_urls)})",
+        ),
+        BenchmarkCase(
+            "yellow_2022_multi_columns",
+            yellow_urls,
+            (
+                "SELECT VendorID, passenger_count, trip_distance, fare_amount "
+                f"FROM read_parquet({sql_list(yellow_urls)})"
+            ),
+        ),
+        BenchmarkCase(
+            "yellow_2022_pulocation_filter",
+            yellow_urls,
+            f"SELECT fare_amount FROM read_parquet({sql_list(yellow_urls)}) WHERE PULocationID = 132",
+        ),
+        BenchmarkCase(
+            "yellow_2022_abs_pulocation_filter",
+            yellow_urls,
+            f"SELECT fare_amount FROM read_parquet({sql_list(yellow_urls)}) WHERE abs(PULocationID) = 132",
+        ),
+        BenchmarkCase(
+            "yellow_2022_http_glob_attempt",
+            (f"{REMOTE_YELLOW_2022_PREFIX}-*.parquet",),
+            f"SELECT count(*) FROM read_parquet('{sql_string(REMOTE_YELLOW_2022_PREFIX)}-*.parquet')",
+        ),
+        BenchmarkCase(
+            "yellow_2022_union_months",
+            (yellow_jan, yellow_feb),
+            (
+                f"SELECT VendorID FROM '{sql_string(yellow_jan)}' "
+                f"UNION ALL SELECT VendorID FROM '{sql_string(yellow_feb)}'"
+            ),
         ),
     ]
 
@@ -311,21 +403,39 @@ def main() -> int:
         setup_remote_extensions(db)
         rows = []
         missing_profiles = []
+        errors = []
         for case in cases:
-            estimate = dryrun(case.query, db)
-            profile_data = profile(case, db, temp_dir)
-            dryrun_bytes = int(estimate["estimated_compressed_bytes"])
-            profiled_value = profile_data["total_bytes_read"]
-            profiled_bytes = None if profiled_value is None else int(profiled_value)
-            if profile_data.get("profile_missing"):
+            estimate = None
+            dryrun_bytes = None
+            confidence = "error"
+            try:
+                estimate = dryrun(case.query, db)
+                dryrun_bytes = int(estimate["estimated_compressed_bytes"])
+                confidence = estimate["confidence"]
+            except RuntimeError as exc:
+                errors.append((case.name, "dryrun", concise_error(exc)))
+
+            profiled_bytes = None
+            profile_missing = False
+            profile_failed = False
+            try:
+                profile_data = profile(case, db, temp_dir)
+                profiled_value = profile_data["total_bytes_read"]
+                profiled_bytes = None if profiled_value is None else int(profiled_value)
+                profile_missing = bool(profile_data.get("profile_missing"))
+            except RuntimeError as exc:
+                profile_failed = True
+                errors.append((case.name, "profile", concise_error(exc)))
+
+            if profile_missing:
                 missing_profiles.append(case.name)
             rows.append(
                 [
                     case.name,
-                    dryrun_bytes,
-                    "missing" if profiled_bytes is None else profiled_bytes,
+                    "error" if estimate is None else dryrun_bytes,
+                    "error" if profile_failed else "missing" if profiled_bytes is None else profiled_bytes,
                     format_ratio(profiled_bytes, dryrun_bytes),
-                    estimate["confidence"],
+                    confidence,
                 ]
             )
 
@@ -348,6 +458,12 @@ def main() -> int:
             print("notes:")
             for name in missing_profiles:
                 print(f"- {name}: DuckDB did not emit profiling JSON; profiled_bytes is missing")
+        elif errors:
+            print()
+            print("notes:")
+        if errors:
+            for name, phase, message in errors:
+                print(f"- {name} {phase}: {message}")
         return 0
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
