@@ -15,6 +15,21 @@ BENCHMARK_ARGS_FOR_PY := $(if $(BENCHMARK_SQL_MODE),"$(BENCHMARK_INPUT)",$(BENCH
 BENCHMARK_COLUMN_ARG := $(if $(COLUMN),--column $(COLUMN),)
 CLANG_FORMAT ?= clang-format
 CLANG_FORMAT_FILES := src/dryrun_extension.cpp src/include/dryrun_extension.hpp
+EMSDK ?= $(HOME)/dev/emsdk
+EMSDK_ENV ?= $(EMSDK)/emsdk_env.sh
+DRYRUN_DUCKDB_VERSION ?= v1.5.1
+DRYRUN_WASM_PLATFORM ?= wasm_eh
+DRYRUN_WASM_ARTIFACT := $(PROJ_DIR)build/$(DRYRUN_WASM_PLATFORM)/repository/$(DRYRUN_DUCKDB_VERSION)/$(DRYRUN_WASM_PLATFORM)/$(EXT_NAME).duckdb_extension.wasm
+DRYRUN_WEB_EXTENSION_DIR := $(PROJ_DIR)web/public/extensions/$(DRYRUN_DUCKDB_VERSION)/$(DRYRUN_WASM_PLATFORM)
+
+.PHONY: wasm
+wasm:
+	@test -f "$(EMSDK_ENV)" || (echo "Missing emsdk environment at $(EMSDK_ENV). Set EMSDK=/path/to/emsdk." >&2; exit 1)
+	cd "$(EMSDK)" && . "$(EMSDK_ENV)" >/dev/null && cd "$(PROJ_DIR)" && $(MAKE) wasm_eh
+	@test -f "$(DRYRUN_WASM_ARTIFACT)" || (echo "Missing wasm artifact at $(DRYRUN_WASM_ARTIFACT)" >&2; exit 1)
+	@mkdir -p "$(DRYRUN_WEB_EXTENSION_DIR)"
+	cp "$(DRYRUN_WASM_ARTIFACT)" "$(DRYRUN_WEB_EXTENSION_DIR)/"
+	@printf "Copied %s to %s/\n" "$(DRYRUN_WASM_ARTIFACT)" "$(DRYRUN_WEB_EXTENSION_DIR)"
 
 .PHONY: benchmark
 benchmark:
