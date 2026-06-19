@@ -345,6 +345,30 @@ static ProjectionInfo ExtractProjectionInfo(const SelectNode &node, vector<strin
 	return result;
 }
 
+static void CollectJoinColumnRefs(const TableRef &ref, unordered_set<string> &columns) {
+	if (ref.type != TableReferenceType::JOIN) {
+		return;
+	}
+	auto &join_ref = ref.Cast<JoinRef>();
+	if (join_ref.condition) {
+		CollectColumnRefs(*join_ref.condition, columns);
+	}
+	for (auto &using_column : join_ref.using_columns) {
+		columns.insert(NormalizeColumn(using_column));
+	}
+	for (auto &duplicate_eliminated_column : join_ref.duplicate_eliminated_columns) {
+		if (duplicate_eliminated_column) {
+			CollectColumnRefs(*duplicate_eliminated_column, columns);
+		}
+	}
+	if (join_ref.left) {
+		CollectJoinColumnRefs(*join_ref.left, columns);
+	}
+	if (join_ref.right) {
+		CollectJoinColumnRefs(*join_ref.right, columns);
+	}
+}
+
 static void MergeProjectionInfo(ProjectionInfo &target, const ProjectionInfo &source) {
 	if (!source.known) {
 		target.known = false;
@@ -499,6 +523,9 @@ static void AnalyzeSelectNode(const SelectNode &node, ParsedQueryInfo &result, b
 		ExtractScanSources(*node.from_table, result);
 	}
 	auto projection = ExtractProjectionInfo(node, result.notes);
+	if (node.from_table) {
+		CollectJoinColumnRefs(*node.from_table, projection.columns);
+	}
 	if (node.where_clause) {
 		CollectColumnRefs(*node.where_clause, projection.columns);
 		if (collect_predicates) {

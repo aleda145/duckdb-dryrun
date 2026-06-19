@@ -49,6 +49,31 @@ FROM dryrun('SELECT i FROM ''{TEMP_DIR}/dryrun_events.parquet''') projected,
 ----
 true
 
+# COUNT(*) over a join still has to read the join key columns.
+query III
+WITH estimate AS (
+	SELECT *
+	FROM dryrun('SELECT count(*) FROM ''{TEMP_DIR}/dryrun_events_a.parquet'' a LEFT JOIN ''{TEMP_DIR}/dryrun_events_b.parquet'' b ON a.i = b.i')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM (
+		SELECT total_compressed_size
+		FROM parquet_metadata('{TEMP_DIR}/dryrun_events_a.parquet')
+		WHERE path_in_schema = 'i'
+		UNION ALL
+		SELECT total_compressed_size
+		FROM parquet_metadata('{TEMP_DIR}/dryrun_events_b.parquet')
+		WHERE path_in_schema = 'i'
+	)
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_compressed_bytes > 0,
+	estimate.confidence
+FROM estimate, metadata;
+----
+true	true	low
+
 # Multiple Parquet files via glob.
 query II
 SELECT estimated_files, estimated_row_groups >= 2
