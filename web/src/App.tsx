@@ -4,11 +4,9 @@ import {
   DRYRUN_EXTENSION_VERSION,
   type DryrunRow,
   type EngineStatus,
-  type NetworkTrafficEvent,
   extractParquetPaths,
   getDryrunEngine,
   runDryrun,
-  subscribeNetworkTraffic,
 } from "./dryrunEngine";
 
 type Scenario = {
@@ -99,7 +97,6 @@ function App() {
     result: null,
     parquetPath: null,
   });
-  const [trafficEvents, setTrafficEvents] = useState<NetworkTrafficEvent[]>([]);
   const runId = useRef(0);
 
   const selectedScenario = SCENARIOS.find(
@@ -111,9 +108,6 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
-    const unsubscribeTraffic = subscribeNetworkTraffic((event) => {
-      setTrafficEvents((previous) => [...previous, event].slice(-8));
-    });
 
     getDryrunEngine((status) => {
       if (!mounted) {
@@ -148,7 +142,6 @@ function App() {
 
     return () => {
       mounted = false;
-      unsubscribeTraffic();
     };
   }, []);
 
@@ -294,7 +287,7 @@ function App() {
         ) : query.error ? (
           <ErrorPanel message={query.error} />
         ) : latestResult ? (
-          <ResultList result={latestResult} trafficEvents={trafficEvents} />
+          <ResultList result={latestResult} />
         ) : (
           <EmptyPanel engineReady={engine.ready} />
         )}
@@ -334,10 +327,8 @@ function ScenarioCard({
 
 function ResultList({
   result,
-  trafficEvents,
 }: {
   result: DryrunRow;
-  trafficEvents: NetworkTrafficEvent[];
 }) {
   return (
     <div className="result-list">
@@ -351,7 +342,10 @@ function ResultList({
       />
       <Metric label="files" value={formatNumber(result.estimated_files)} />
       <Metric label="confidence" value={result.confidence ?? "unknown"} />
-      <ParquetFooterReadMetric events={trafficEvents} />
+      <Metric
+        label="Parquet footer read"
+        value={formatBytes(result.estimated_metadata_bytes)}
+      />
     </div>
   );
 }
@@ -361,21 +355,6 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function ParquetFooterReadMetric({ events }: { events: NetworkTrafficEvent[] }) {
-  const latestGet = events.findLast((event) => event.method === "GET");
-
-  return (
-    <div className="metric result-row">
-      <span>Parquet footer read</span>
-      <strong>
-        {latestGet
-          ? formatBytes(latestGet.responseBytes)
-          : "waiting for first Parquet footer request"}
-      </strong>
     </div>
   );
 }

@@ -20,6 +20,7 @@ export type DryrunRow = {
   estimated_compute_bytes: number | bigint | null
   estimated_compressed_bytes: number | bigint | null
   estimated_uncompressed_bytes: number | bigint | null
+  estimated_metadata_bytes: number | bigint | null
   estimated_files: number | bigint | null
   estimated_row_groups: number | bigint | null
   confidence: string | null
@@ -33,17 +34,6 @@ export type ParquetMetadataRow = {
   num_row_groups: number | bigint | null
 }
 
-export type NetworkTrafficEvent = {
-  url: string
-  method: string
-  status: number
-  range: string | null
-  responseBytes: number
-  contentLength: string | null
-  contentRange: string | null
-  durationMs: number
-}
-
 type DryrunEngine = {
   db: AsyncDuckDB
   conn: AsyncDuckDBConnection
@@ -51,7 +41,6 @@ type DryrunEngine = {
 }
 
 let enginePromise: Promise<DryrunEngine> | null = null
-const networkListeners = new Set<(event: NetworkTrafficEvent) => void>()
 
 export function getDryrunEngine(
   onStatus?: (status: EngineStatus) => void,
@@ -60,15 +49,6 @@ export function getDryrunEngine(
     enginePromise = createDryrunEngine(onStatus)
   }
   return enginePromise
-}
-
-export function subscribeNetworkTraffic(
-  listener: (event: NetworkTrafficEvent) => void,
-): () => void {
-  networkListeners.add(listener)
-  return () => {
-    networkListeners.delete(listener)
-  }
 }
 
 export async function runDryrun(sql: string): Promise<DryrunRow> {
@@ -134,7 +114,7 @@ async function createDryrunEngine(
 ): Promise<DryrunEngine> {
   onStatus?.('Preparing DuckDB-Wasm')
 
-  const worker = createInstrumentedDuckDBWorker()
+  const worker = createDuckDBWorker()
   const db = new AsyncDuckDB(new ConsoleLogger(), worker)
 
   await db.instantiate(DUCKDB_EH_WASM_URL)
@@ -173,83 +153,8 @@ async function createDryrunEngine(
   return { db, conn, extensionRepository }
 }
 
-function createInstrumentedDuckDBWorker(): Worker {
-  const channelName = `duckdb-dryrun-network-${crypto.randomUUID()}`
-  const channel = new BroadcastChannel(channelName)
-  channel.addEventListener('message', (event: MessageEvent<NetworkTrafficEvent>) => {
-    for (const listener of networkListeners) {
-      listener(event.data)
-    }
-  })
-
-  const workerScript = `
-    (() => {
-      const channel = new BroadcastChannel(${JSON.stringify(channelName)});
-      const workerUrl = ${JSON.stringify(new URL(ehWorker, window.location.href).toString())};
-      const NativeXMLHttpRequest = self.XMLHttpRequest;
-
-      if (NativeXMLHttpRequest) {
-        self.XMLHttpRequest = function XMLHttpRequestWithTraffic() {
-          const xhr = new NativeXMLHttpRequest();
-          let method = "";
-          let url = "";
-          const requestHeaders = {};
-          let startedAt = 0;
-
-          const nativeOpen = xhr.open.bind(xhr);
-          xhr.open = function(nextMethod, nextUrl, ...rest) {
-            method = String(nextMethod || "");
-            url = String(nextUrl || "");
-            return nativeOpen(nextMethod, nextUrl, ...rest);
-          };
-
-          const nativeSetRequestHeader = xhr.setRequestHeader.bind(xhr);
-          xhr.setRequestHeader = function(name, value) {
-            requestHeaders[String(name).toLowerCase()] = String(value);
-            return nativeSetRequestHeader(name, value);
-          };
-
-          const nativeSend = xhr.send.bind(xhr);
-          xhr.send = function(body) {
-            startedAt = performance.now();
-            xhr.addEventListener("loadend", () => {
-              if (!url.includes(".parquet")) {
-                return;
-              }
-
-              let responseBytes = 0;
-              if (xhr.response instanceof ArrayBuffer) {
-                responseBytes = xhr.response.byteLength;
-              } else if (typeof xhr.responseText === "string") {
-                responseBytes = new TextEncoder().encode(xhr.responseText).byteLength;
-              }
-
-              channel.postMessage({
-                url,
-                method,
-                status: xhr.status,
-                range: requestHeaders.range || null,
-                responseBytes,
-                contentLength: xhr.getResponseHeader("Content-Length"),
-                contentRange: xhr.getResponseHeader("Content-Range"),
-                durationMs: Math.round(performance.now() - startedAt),
-              });
-            });
-            return nativeSend(body);
-          };
-
-          return xhr;
-        };
-      }
-
-      importScripts(workerUrl);
-    })();
-  `
-
-  const workerUrl = URL.createObjectURL(
-    new Blob([workerScript], { type: 'text/javascript' }),
-  )
-  return new Worker(workerUrl)
+function createDuckDBWorker(): Worker {
+  return new Worker(ehWorker)
 }
 
 function buildExtensionRepositoryUrl(): string {
@@ -275,6 +180,7 @@ async function assertWasmExtensionAvailable(extensionUrl: string) {
   } catch (error) {
     throw new Error(
       `Could not fetch dryrun WASM extension at ${extensionUrl}: ${normalizeError(error)}`,
+      { cause: error },
     )
   }
 

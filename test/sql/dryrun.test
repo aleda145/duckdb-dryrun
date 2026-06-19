@@ -28,18 +28,19 @@ COPY (
 ) TO '{TEMP_DIR}/dryrun_events_b.parquet' (FORMAT PARQUET);
 
 # One local Parquet file, SELECT *.
-query IIIIIIT
+query IIIIIIIT
 SELECT
 	estimated_compute_bytes > 0,
 	estimated_compute_bytes = estimated_compressed_bytes,
 	estimated_uncompressed_bytes > 0,
+	estimated_metadata_bytes > 0,
 	estimated_files,
 	estimated_row_groups,
 	confidence,
 	notes LIKE '%estimated_compute_bytes equals estimated_compressed_bytes%'
 FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''');
 ----
-true	true	true	1	2	high	true
+true	true	true	true	1	2	high	true
 
 # Projected columns should estimate fewer bytes than SELECT *.
 query I

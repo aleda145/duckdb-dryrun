@@ -37,6 +37,7 @@ struct DryrunEstimate {
 	int64_t estimated_compute_bytes = 0;
 	int64_t estimated_compressed_bytes = 0;
 	int64_t estimated_uncompressed_bytes = 0;
+	int64_t estimated_metadata_bytes = 0;
 	int64_t estimated_files = 0;
 	int64_t estimated_row_groups = 0;
 	string confidence = "high";
@@ -58,6 +59,7 @@ struct DryrunBindData : public TableFunctionData {
 		return estimate.estimated_compute_bytes == other.estimate.estimated_compute_bytes &&
 		       estimate.estimated_compressed_bytes == other.estimate.estimated_compressed_bytes &&
 		       estimate.estimated_uncompressed_bytes == other.estimate.estimated_uncompressed_bytes &&
+		       estimate.estimated_metadata_bytes == other.estimate.estimated_metadata_bytes &&
 		       estimate.estimated_files == other.estimate.estimated_files &&
 		       estimate.estimated_row_groups == other.estimate.estimated_row_groups &&
 		       estimate.confidence == other.estimate.confidence && estimate.notes == other.estimate.notes;
@@ -668,6 +670,14 @@ static int64_t GetOptionalInt64(MaterializedQueryResult &result, idx_t column, i
 	return value.GetValue<int64_t>();
 }
 
+static int64_t GetOptionalUInt64AsInt64(MaterializedQueryResult &result, idx_t column, idx_t row) {
+	auto value = result.GetValue(column, row);
+	if (value.IsNull()) {
+		return 0;
+	}
+	return UnsafeNumericCast<int64_t>(value.GetValue<uint64_t>());
+}
+
 static string GetOptionalString(MaterializedQueryResult &result, idx_t column, idx_t row) {
 	auto value = result.GetValue(column, row);
 	if (value.IsNull()) {
@@ -688,8 +698,21 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 	}
 
 	unordered_map<RowGroupKey, RowGroupEstimate, RowGroupKeyHash> row_groups;
+	unordered_set<string> metadata_files;
 	for (auto &path : parsed.paths) {
 		Connection metadata_connection(*context.db);
+		auto file_metadata_sql = "SELECT file_name, footer_size FROM parquet_file_metadata('" + EscapeSQLString(path) + "')";
+		auto file_metadata = metadata_connection.Query(file_metadata_sql);
+		if (file_metadata->HasError()) {
+			throw BinderException("dryrun only supports Parquet scans in v1: %s", file_metadata->GetError());
+		}
+		for (idx_t row = 0; row < file_metadata->RowCount(); row++) {
+			auto file_name = file_metadata->GetValue(0, row).GetValue<string>();
+			if (metadata_files.insert(file_name).second) {
+				estimate.estimated_metadata_bytes += GetOptionalUInt64AsInt64(*file_metadata, 1, row) + 8;
+			}
+		}
+
 		auto metadata_sql = "SELECT file_name, row_group_id, path_in_schema, total_compressed_size, "
 		                    "total_uncompressed_size, stats_min_value, stats_max_value, stats_min, stats_max "
 		                    "FROM parquet_metadata('" +
@@ -791,6 +814,8 @@ static unique_ptr<FunctionData> DryrunBind(ClientContext &context, TableFunction
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("notes");
 	return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("estimated_metadata_bytes");
+	return_types.emplace_back(LogicalType::BIGINT);
 
 	if (input.inputs.size() != 1 || input.inputs[0].IsNull()) {
 		throw BinderException("dryrun requires a non-NULL constant SQL string");
@@ -824,6 +849,7 @@ static void DryrunFunction(ClientContext &context, TableFunctionInput &data_p, D
 	output.SetValue(4, 0, Value::BIGINT(estimate.estimated_row_groups));
 	output.SetValue(5, 0, Value(estimate.confidence));
 	output.SetValue(6, 0, Value(JoinNotes(estimate.notes)));
+	output.SetValue(7, 0, Value::BIGINT(estimate.estimated_metadata_bytes));
 	output.SetCardinality(1);
 	state.emitted = true;
 }

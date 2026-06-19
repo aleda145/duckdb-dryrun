@@ -10,8 +10,9 @@ require dryrun
 # dryrun bytes against Parquet metadata, then compare the same query shape with
 # DuckDB JSON profiling bytes from actually executed queries.
 
-# Full scan bytes should match the sum of compressed Parquet column chunks.
-query IITT
+# Full scan bytes should match the sum of compressed Parquet column chunks,
+# while metadata bytes report the Parquet footer request separately.
+query IIITT
 WITH estimate AS (
 	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2020-04.parquet''')
 ), metadata AS (
@@ -19,15 +20,19 @@ WITH estimate AS (
 		sum(total_compressed_size) AS compressed_bytes,
 		sum(total_uncompressed_size) AS uncompressed_bytes
 	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
+), file_metadata AS (
+	SELECT footer_size + 8 AS metadata_bytes
+	FROM parquet_file_metadata('data/yellow_tripdata_2020-04.parquet')
 )
 SELECT
 	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
 	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
+	estimate.estimated_metadata_bytes = file_metadata.metadata_bytes,
 	estimate.confidence,
 	estimate.notes
-FROM estimate, metadata;
+FROM estimate, metadata, file_metadata;
 ----
-true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+true	true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
 
 # Single-column projection bytes should match the projected column chunk.
 query IITT
