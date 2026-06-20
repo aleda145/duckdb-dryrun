@@ -23,6 +23,7 @@ export type DryrunRow = {
   estimated_metadata_bytes: number | bigint | null
   estimated_files: number | bigint | null
   estimated_row_groups: number | bigint | null
+  total_row_groups: number | bigint | null
   confidence: string | null
   notes: string | null
 }

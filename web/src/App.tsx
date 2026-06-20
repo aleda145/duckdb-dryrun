@@ -18,6 +18,8 @@ type Scenario = {
 };
 
 const GAIA_PATH = "https://dryrun-data.dahl.dev/gaia-5m.parquet";
+const HOUSE_PRICES_PATH =
+  "https://dryrun-data.dahl.dev/house_prices_all.parquet";
 const YELLOW_2022_PREFIX =
   "https://dryrun-data.dahl.dev/yellow_tripdata_2022";
 const TAXI_ZONES_PATH =
@@ -42,12 +44,13 @@ FROM '${GAIA_PATH}'
 WHERE b = 1;`,
   },
   {
-    id: "nyc-taxi-january",
-    title: "NYC taxi January",
+    id: "house-prices-rowgroups",
+    title: "House prices pruning",
     primaryFact: "1 file",
-    secondaryFact: "38.14 MB",
-    sql: `SELECT *
-FROM '${YELLOW_2022_PATHS[0]}';`,
+    secondaryFact: "195.6 MB",
+    sql: `SELECT count(*)
+FROM '${HOUSE_PRICES_PATH}'
+WHERE price > 500000000;`,
   },
   {
     id: "nyc-taxi-2022",
@@ -352,7 +355,7 @@ function ResultList({
       />
       <Metric
         label="rowgroups"
-        value={formatNumber(result.estimated_row_groups)}
+        value={`${formatNumber(result.estimated_row_groups)} / ${formatNumber(result.total_row_groups)}`}
       />
       <Metric label="files" value={formatNumber(result.estimated_files)} />
       <Metric label="confidence" value={result.confidence ?? "unknown"} />
