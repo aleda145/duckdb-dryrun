@@ -24,6 +24,7 @@ REMOTE_PROPERTIES = "https://data.bostadsbussen.se/properties.parquet"
 REMOTE_GAIA = "https://dryrun-data.dahl.dev/gaia-5m.parquet"
 REMOTE_YELLOW_2022_PREFIX = "https://dryrun-data.dahl.dev/yellow_tripdata_2022"
 REMOTE_TAXI_ZONES = "https://dryrun-data.dahl.dev/taxi_zone_lookup.parquet"
+REMOTE_HOUSE_PRICES_ALL = "https://dryrun-data.dahl.dev/house_prices_all.parquet"
 
 
 @dataclass(frozen=True)
@@ -264,6 +265,37 @@ def default_cases() -> list[BenchmarkCase]:
             "properties_price",
             (REMOTE_PROPERTIES,),
             f"SELECT price FROM '{sql_string(REMOTE_PROPERTIES)}'",
+        ),
+        BenchmarkCase(
+            "house_prices_full",
+            (REMOTE_HOUSE_PRICES_ALL,),
+            f"SELECT * FROM '{sql_string(REMOTE_HOUSE_PRICES_ALL)}'",
+        ),
+        BenchmarkCase(
+            "house_prices_price_date_town",
+            (REMOTE_HOUSE_PRICES_ALL,),
+            f"SELECT price, date, town FROM '{sql_string(REMOTE_HOUSE_PRICES_ALL)}'",
+        ),
+        BenchmarkCase(
+            "house_prices_price_gt_100m",
+            (REMOTE_HOUSE_PRICES_ALL,),
+            f"SELECT price FROM '{sql_string(REMOTE_HOUSE_PRICES_ALL)}' WHERE price > 100000000",
+        ),
+        BenchmarkCase(
+            "house_prices_count_price_gt_500m",
+            (REMOTE_HOUSE_PRICES_ALL,),
+            f"SELECT count(*) FROM '{sql_string(REMOTE_HOUSE_PRICES_ALL)}' WHERE price > 500000000",
+        ),
+        BenchmarkCase(
+            "house_prices_york_avg_price_by_date",
+            (REMOTE_HOUSE_PRICES_ALL,),
+            (
+                f"SELECT date, avg(price) AS avg_price "
+                f"FROM '{sql_string(REMOTE_HOUSE_PRICES_ALL)}' "
+                f"WHERE town = BLOB 'YORK' "
+                f"GROUP BY date "
+                f"ORDER BY date"
+            ),
         ),
         BenchmarkCase("gaia_full", (REMOTE_GAIA,), f"SELECT * FROM '{sql_string(REMOTE_GAIA)}'"),
         BenchmarkCase("gaia_count", (REMOTE_GAIA,), f"SELECT count(*) FROM '{sql_string(REMOTE_GAIA)}'"),
