@@ -86,6 +86,7 @@ type QueryState = {
 function App() {
   const [selectedScenarioId, setSelectedScenarioId] = useState(SCENARIOS[0].id);
   const [sql, setSql] = useState(SCENARIOS[0].sql);
+  const [scenarioRun, setScenarioRun] = useState(0);
   const [engine, setEngine] = useState<EngineState>({
     ready: false,
     status: "Starting",
@@ -173,12 +174,13 @@ function App() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [engine.ready, sql]);
+  }, [engine.ready, sql, scenarioRun]);
 
   function selectScenario(scenario: Scenario) {
     setSelectedScenarioId(scenario.id);
     markQueryPending(scenario.sql);
     setSql(scenario.sql);
+    setScenarioRun((previous) => previous + 1);
   }
 
   function markQueryPending(nextSql: string) {
