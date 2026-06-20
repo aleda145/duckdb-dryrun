@@ -15,6 +15,17 @@ type Scenario = {
   primaryFact: string;
   secondaryFact: string;
   sql: string;
+  schemas: SchemaSource[];
+};
+
+type SchemaColumn = {
+  name: string;
+  type: string;
+};
+
+type SchemaSource = {
+  title: string;
+  columns: SchemaColumn[];
 };
 
 const GAIA_PATH = "https://dryrun-data.dahl.dev/gaia-5m.parquet";
@@ -39,6 +50,18 @@ const SCENARIOS: Scenario[] = [
     secondaryFact: "93.2 MB",
     sql: `SELECT l, b, parallax,
 FROM '${GAIA_PATH}'`,
+    schemas: [
+      {
+        title: GAIA_PATH,
+        columns: [
+          { name: "l", type: "float" },
+          { name: "b", type: "float" },
+          { name: "parallax", type: "float" },
+          { name: "phot_g_mean_mag", type: "float" },
+          { name: "bp_rp", type: "float" },
+        ],
+      },
+    ],
   },
   {
     id: "house-prices-rowgroups",
@@ -48,6 +71,27 @@ FROM '${GAIA_PATH}'`,
     sql: `SELECT count(*)
 FROM '${HOUSE_PRICES_PATH}'
 WHERE price > 500000000`,
+    schemas: [
+      {
+        title: HOUSE_PRICES_PATH,
+        columns: [
+          { name: "price", type: "uinteger" },
+          { name: "date", type: "usmallint" },
+          { name: "postcode1", type: "blob" },
+          { name: "postcode2", type: "blob" },
+          { name: "type", type: "tinyint" },
+          { name: "is_new", type: "utinyint" },
+          { name: "duration", type: "tinyint" },
+          { name: "addr1", type: "blob" },
+          { name: "addr2", type: "blob" },
+          { name: "street", type: "blob" },
+          { name: "locality", type: "blob" },
+          { name: "town", type: "blob" },
+          { name: "district", type: "blob" },
+          { name: "county", type: "blob" },
+        ],
+      },
+    ],
   },
   {
     id: "nyc-taxi-2022",
@@ -56,6 +100,12 @@ WHERE price > 500000000`,
     secondaryFact: "615.11 MB",
     sql: `SELECT VendorID, passenger_count, trip_distance, fare_amount
 FROM read_parquet(${YELLOW_2022_SQL_LIST})`,
+    schemas: [
+      {
+        title: `${YELLOW_2022_PREFIX}-*.parquet`,
+        columns: yellowTripdataColumns(),
+      },
+    ],
   },
   {
     id: "nyc-taxi-zone-join",
@@ -67,8 +117,47 @@ FROM '${YELLOW_2022_PATHS[0]}' t
 JOIN '${TAXI_ZONES_PATH}' z
 ON t.PULocationID = z.LocationID
 WHERE z.Borough = 'Manhattan'`,
+    schemas: [
+      {
+        title: YELLOW_2022_PATHS[0],
+        columns: yellowTripdataColumns(),
+      },
+      {
+        title: TAXI_ZONES_PATH,
+        columns: [
+          { name: "LocationID", type: "bigint" },
+          { name: "Borough", type: "varchar" },
+          { name: "Zone", type: "varchar" },
+          { name: "service_zone", type: "varchar" },
+        ],
+      },
+    ],
   },
 ];
+
+function yellowTripdataColumns(): SchemaColumn[] {
+  return [
+    { name: "VendorID", type: "bigint" },
+    { name: "tpep_pickup_datetime", type: "timestamp" },
+    { name: "tpep_dropoff_datetime", type: "timestamp" },
+    { name: "passenger_count", type: "double" },
+    { name: "trip_distance", type: "double" },
+    { name: "RatecodeID", type: "double" },
+    { name: "store_and_fwd_flag", type: "varchar" },
+    { name: "PULocationID", type: "bigint" },
+    { name: "DOLocationID", type: "bigint" },
+    { name: "payment_type", type: "bigint" },
+    { name: "fare_amount", type: "double" },
+    { name: "extra", type: "double" },
+    { name: "mta_tax", type: "double" },
+    { name: "tip_amount", type: "double" },
+    { name: "tolls_amount", type: "double" },
+    { name: "improvement_surcharge", type: "double" },
+    { name: "total_amount", type: "double" },
+    { name: "congestion_surcharge", type: "double" },
+    { name: "airport_fee", type: "double" },
+  ];
+}
 
 type EngineState = {
   ready: boolean;
@@ -85,6 +174,7 @@ type QueryState = {
 
 function App() {
   const [selectedScenarioId, setSelectedScenarioId] = useState(SCENARIOS[0].id);
+  const [schemaOpen, setSchemaOpen] = useState(false);
   const [sql, setSql] = useState(SCENARIOS[0].sql);
   const [scenarioRun, setScenarioRun] = useState(0);
   const [engine, setEngine] = useState<EngineState>({
@@ -264,6 +354,20 @@ function App() {
         </div>
       </section>
 
+      {selectedScenario ? (
+        <section className="schema-section" aria-label="Selected example schema">
+          <button
+            type="button"
+            className="schema-button"
+            onClick={() => setSchemaOpen((previous) => !previous)}
+            aria-expanded={schemaOpen}
+          >
+            {schemaOpen ? "Hide Schema" : "Schema"}
+          </button>
+          {schemaOpen ? <SchemaPanel scenario={selectedScenario} /> : null}
+        </section>
+      ) : null}
+
       <section className="query-section" aria-label="SQL dryrun call">
         <div className="duckdb-call">
           <div className="call-line call-wrapper">
@@ -343,6 +447,32 @@ function ScenarioCard({
         </span>
       </button>
     </article>
+  );
+}
+
+function SchemaPanel({ scenario }: { scenario: Scenario }) {
+  return (
+    <div className="schema-panel">
+      <div className="schema-heading">
+        <strong>{scenario.title} schema</strong>
+        <span>{scenario.schemas.length === 1 ? "1 source" : `${scenario.schemas.length} sources`}</span>
+      </div>
+      <div className="schema-sources">
+        {scenario.schemas.map((source) => (
+          <section className="schema-source" key={source.title}>
+            <h2>{source.title}</h2>
+            <div className="schema-columns">
+              {source.columns.map((column) => (
+                <div className="schema-column" key={column.name}>
+                  <code>{column.name}</code>
+                  <span>{column.type}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
   );
 }
 
