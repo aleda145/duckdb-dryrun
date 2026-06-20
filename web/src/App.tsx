@@ -20,10 +20,8 @@ type Scenario = {
 const GAIA_PATH = "https://dryrun-data.dahl.dev/gaia-5m.parquet";
 const HOUSE_PRICES_PATH =
   "https://dryrun-data.dahl.dev/house_prices_all.parquet";
-const YELLOW_2022_PREFIX =
-  "https://dryrun-data.dahl.dev/yellow_tripdata_2022";
-const TAXI_ZONES_PATH =
-  "https://dryrun-data.dahl.dev/taxi_zone_lookup.parquet";
+const YELLOW_2022_PREFIX = "https://dryrun-data.dahl.dev/yellow_tripdata_2022";
+const TAXI_ZONES_PATH = "https://dryrun-data.dahl.dev/taxi_zone_lookup.parquet";
 const YELLOW_2022_PATHS = Array.from(
   { length: 12 },
   (_, index) =>
@@ -321,8 +319,7 @@ function App() {
       </section>
 
       <footer className="footer">
-        <span>built by Alex</span>
-        <a href="https://dahl.dev">dahl.dev</a>
+        <a href="https://dahl.dev">Built by Alex</a>
       </footer>
     </main>
   );
@@ -352,11 +349,7 @@ function ScenarioCard({
   );
 }
 
-function ResultList({
-  result,
-}: {
-  result: DryrunRow;
-}) {
+function ResultList({ result }: { result: DryrunRow }) {
   return (
     <div className="result-list">
       <Metric
