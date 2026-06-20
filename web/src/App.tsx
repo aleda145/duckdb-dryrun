@@ -329,8 +329,8 @@ function App() {
     <main className="app-shell">
       <header className="hero">
         <h1>duckdb dryrun</h1>
+        <p>Estimate Parquet scan bytes before running a query. </p>
         <p>
-          Estimate Parquet scan bytes before running a query.{" "}
           <a
             href="https://github.com/aleda145/duckdb-dryrun/"
             target="_blank"
@@ -355,7 +355,10 @@ function App() {
       </section>
 
       {selectedScenario ? (
-        <section className="schema-section" aria-label="Selected example schema">
+        <section
+          className="schema-section"
+          aria-label="Selected example schema"
+        >
           <button
             type="button"
             className="schema-button"
@@ -455,7 +458,11 @@ function SchemaPanel({ scenario }: { scenario: Scenario }) {
     <div className="schema-panel">
       <div className="schema-heading">
         <strong>{scenario.title} schema</strong>
-        <span>{scenario.schemas.length === 1 ? "1 source" : `${scenario.schemas.length} sources`}</span>
+        <span>
+          {scenario.schemas.length === 1
+            ? "1 source"
+            : `${scenario.schemas.length} sources`}
+        </span>
       </div>
       <div className="schema-sources">
         {scenario.schemas.map((source) => (
