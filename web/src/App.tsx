@@ -267,10 +267,11 @@ function App() {
 
       <section className="query-section" aria-label="SQL dryrun call">
         <div className="duckdb-call">
-          <div className="call-line">
+          <div className="call-line call-wrapper">
             <code>SELECT * FROM dryrun(&apos;</code>
           </div>
           <textarea
+            className="sql-payload"
             ref={textareaRef}
             value={sql}
             onChange={(event) => {
@@ -281,11 +282,8 @@ function App() {
             spellCheck={false}
             aria-label="SQL string passed to dryrun"
           />
-          <div className="call-line end">
+          <div className="call-line call-wrapper end">
             <code>&apos;);</code>
-            <span className="live-indicator">
-              {query.running ? "running" : engine.ready ? "live" : "waiting"}
-            </span>
           </div>
         </div>
       </section>

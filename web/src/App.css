@@ -136,48 +136,45 @@ textarea:focus {
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px;
+  padding: 0 12px;
   color: var(--code-text);
   font-family: var(--mono);
   font-size: 12px;
 }
 
+.call-wrapper {
+  color: color-mix(in srgb, var(--code-text) 62%, transparent);
+  background: color-mix(in srgb, var(--code-bg) 88%, #ffffff);
+}
+
 .call-line code {
   min-width: 0;
   padding: 0;
-  color: var(--code-text);
+  color: inherit;
   background: transparent;
   overflow-wrap: anywhere;
   white-space: normal;
 }
 
-.call-line.end {
-  border-top: 1px solid color-mix(in srgb, var(--code-text) 12%, transparent);
+.call-wrapper.end {
+  border-top: 1px solid color-mix(in srgb, var(--code-text) 10%, transparent);
 }
 
-textarea {
+.sql-payload {
   width: 100%;
   min-height: 68px;
-  padding: 6px 10px;
+  padding: 8px 12px 8px 16px;
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--code-text) 12%, transparent);
+  border-left: 3px solid var(--accent);
   box-sizing: border-box;
   overflow: hidden;
   resize: none;
   outline: none;
   color: var(--code-text);
-  background: var(--code-bg);
+  background: color-mix(in srgb, var(--code-bg) 92%, var(--accent));
   font: 12px/1.35 var(--mono);
   letter-spacing: 0;
-}
-
-.live-indicator {
-  margin-left: auto;
-  border: 1px solid color-mix(in srgb, var(--code-text) 18%, transparent);
-  border-radius: 999px;
-  padding: 1px 7px;
-  color: var(--code-text);
-  font: 11px/1.4 var(--sans);
 }
 
 .result-section {
@@ -345,9 +342,9 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  textarea {
+  .sql-payload {
     min-height: 84px;
-    padding-inline: 16px;
+    padding-inline: 18px 12px;
   }
 
   .call-line {
@@ -365,10 +362,6 @@ textarea {
   .scenario-facts {
     max-width: 38%;
     white-space: normal;
-  }
-
-  .live-indicator {
-    flex: 0 0 auto;
   }
 
   .footer {
