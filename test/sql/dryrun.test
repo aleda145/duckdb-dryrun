@@ -27,6 +27,14 @@ COPY (
 	FROM range(128, 256) t(i)
 ) TO '{TEMP_DIR}/dryrun_events_b.parquet' (FORMAT PARQUET);
 
+statement ok
+COPY (
+	SELECT
+		i::INTEGER AS price,
+		CASE WHEN i < 2048 THEN BLOB 'ALPHA' ELSE BLOB 'YORK' END AS town
+	FROM range(0, 4096) t(i)
+) TO '{TEMP_DIR}/dryrun_blob_events.parquet' (FORMAT PARQUET, ROW_GROUP_SIZE 2048);
+
 # One local Parquet file, SELECT *.
 query IIIIIIITI
 SELECT
@@ -99,6 +107,46 @@ FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet'' WHERE i < 10') f
      dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''') full_scan;
 ----
 true	true	medium
+
+# BLOB typed literals should be treated as scalar predicate constants.
+query IIII
+WITH estimate AS (
+	SELECT *
+	FROM dryrun('SELECT price FROM ''{TEMP_DIR}/dryrun_blob_events.parquet'' WHERE town = BLOB ''YORK''')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('{TEMP_DIR}/dryrun_blob_events.parquet')
+	WHERE row_group_id = 1
+	  AND path_in_schema IN ('price', 'town')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_row_groups,
+	estimate.total_row_groups,
+	estimate.confidence
+FROM estimate, metadata;
+----
+true	1	2	medium
+
+# Explicit casts around literal strings should also remain prunable for BLOB predicates.
+query IIII
+WITH estimate AS (
+	SELECT *
+	FROM dryrun('SELECT price FROM ''{TEMP_DIR}/dryrun_blob_events.parquet'' WHERE town = CAST(''YORK'' AS BLOB)')
+), metadata AS (
+	SELECT sum(total_compressed_size) AS compressed_bytes
+	FROM parquet_metadata('{TEMP_DIR}/dryrun_blob_events.parquet')
+	WHERE row_group_id = 1
+	  AND path_in_schema IN ('price', 'town')
+)
+SELECT
+	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_row_groups,
+	estimate.total_row_groups,
+	estimate.confidence
+FROM estimate, metadata;
+----
+true	1	2	medium
 
 # Complex filters fall back without executing the target query expression.
 query IT

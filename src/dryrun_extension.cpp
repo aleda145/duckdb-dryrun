@@ -8,6 +8,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
@@ -430,10 +431,74 @@ static bool TryGetColumnName(const ParsedExpression &expr, string &column_name) 
 	return true;
 }
 
-static bool TryGetConstantValue(const ParsedExpression &expr, string &value) {
+static bool TryParseDouble(const string &value, double &result);
+
+static bool IsNumericCastTargetName(const string &type_name) {
+	return type_name == "tinyint" || type_name == "smallint" || type_name == "integer" || type_name == "int" ||
+	       type_name == "bigint" || type_name == "hugeint" || type_name == "utinyint" || type_name == "usmallint" ||
+	       type_name == "uinteger" || type_name == "ubigint" || type_name == "uhugeint" || type_name == "float" ||
+	       type_name == "real" || type_name == "double" || StringUtil::StartsWith(type_name, "decimal");
+}
+
+static bool CastTargetCanUseLiteralString(const LogicalType &target_type, const string &value) {
+	auto target_name = StringUtil::Lower(UnquoteIdentifier(target_type.ToString()));
+	if (target_name == "blob" || target_name == "bytea" || target_name == "varbinary" || target_name == "binary" ||
+	    target_name == "varchar" || target_name == "text" || target_name == "string") {
+		return true;
+	}
+	if (IsNumericCastTargetName(target_name)) {
+		double parsed_value;
+		return TryParseDouble(value, parsed_value);
+	}
+
+	switch (target_type.id()) {
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::VARCHAR:
+		return true;
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DECIMAL: {
+		double parsed_value;
+		return TryParseDouble(value, parsed_value);
+	}
+	default:
+		return false;
+	}
+}
+
+static bool TryGetScalarLiteralValue(const ParsedExpression &expr, string &value) {
 	if (expr.GetExpressionClass() == ExpressionClass::CONSTANT) {
 		auto &constant = expr.Cast<ConstantExpression>();
-		value = StripConstant(constant.value.ToSQLString());
+		if (constant.value.type().id() == LogicalTypeId::BLOB) {
+			value = StringValue::Get(constant.value);
+		} else {
+			value = StripConstant(constant.value.ToSQLString());
+		}
+		return true;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+		auto &cast = expr.Cast<CastExpression>();
+		if (cast.try_cast || !cast.child) {
+			return false;
+		}
+		string child_value;
+		if (!TryGetScalarLiteralValue(*cast.child, child_value)) {
+			return false;
+		}
+		if (!CastTargetCanUseLiteralString(cast.cast_type, child_value)) {
+			return false;
+		}
+		value = std::move(child_value);
 		return true;
 	}
 	return false;
@@ -486,13 +551,13 @@ static bool TryExtractPredicate(const ParsedExpression &expr, Predicate &predica
 	}
 	string column_name;
 	string constant_value;
-	if (TryGetColumnName(*comparison.left, column_name) && TryGetConstantValue(*comparison.right, constant_value)) {
+	if (TryGetColumnName(*comparison.left, column_name) && TryGetScalarLiteralValue(*comparison.right, constant_value)) {
 		predicate.column = std::move(column_name);
 		predicate.op = std::move(op);
 		predicate.value = std::move(constant_value);
 		return true;
 	}
-	if (TryGetConstantValue(*comparison.left, constant_value) && TryGetColumnName(*comparison.right, column_name)) {
+	if (TryGetScalarLiteralValue(*comparison.left, constant_value) && TryGetColumnName(*comparison.right, column_name)) {
 		predicate.column = std::move(column_name);
 		predicate.op = InvertOperator(op);
 		predicate.value = std::move(constant_value);
