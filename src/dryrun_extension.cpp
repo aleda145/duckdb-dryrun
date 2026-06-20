@@ -40,6 +40,7 @@ struct DryrunEstimate {
 	int64_t estimated_metadata_bytes = 0;
 	int64_t estimated_files = 0;
 	int64_t estimated_row_groups = 0;
+	int64_t total_row_groups = 0;
 	string confidence = "high";
 	vector<string> notes;
 };
@@ -62,6 +63,7 @@ struct DryrunBindData : public TableFunctionData {
 		       estimate.estimated_metadata_bytes == other.estimate.estimated_metadata_bytes &&
 		       estimate.estimated_files == other.estimate.estimated_files &&
 		       estimate.estimated_row_groups == other.estimate.estimated_row_groups &&
+		       estimate.total_row_groups == other.estimate.total_row_groups &&
 		       estimate.confidence == other.estimate.confidence && estimate.notes == other.estimate.notes;
 	}
 };
@@ -754,6 +756,7 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 
 	unordered_set<string> scanned_files;
 	bool filter_stats_missing = false;
+	estimate.total_row_groups = UnsafeNumericCast<int64_t>(row_groups.size());
 	for (auto &entry : row_groups) {
 		auto &row_group = entry.second;
 		bool pruned = false;
@@ -816,6 +819,8 @@ static unique_ptr<FunctionData> DryrunBind(ClientContext &context, TableFunction
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("estimated_metadata_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("total_row_groups");
+	return_types.emplace_back(LogicalType::BIGINT);
 
 	if (input.inputs.size() != 1 || input.inputs[0].IsNull()) {
 		throw BinderException("dryrun requires a non-NULL constant SQL string");
@@ -850,6 +855,7 @@ static void DryrunFunction(ClientContext &context, TableFunctionInput &data_p, D
 	output.SetValue(5, 0, Value(estimate.confidence));
 	output.SetValue(6, 0, Value(JoinNotes(estimate.notes)));
 	output.SetValue(7, 0, Value::BIGINT(estimate.estimated_metadata_bytes));
+	output.SetValue(8, 0, Value::BIGINT(estimate.total_row_groups));
 	output.SetCardinality(1);
 	state.emitted = true;
 }

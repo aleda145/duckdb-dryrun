@@ -517,10 +517,13 @@ def main() -> int:
         for case in cases:
             estimate = None
             dryrun_bytes = None
+            row_groups = "error"
             confidence = "error"
             try:
                 estimate = dryrun(case.query, db)
                 dryrun_bytes = int(estimate["estimated_compressed_bytes"])
+                total_row_groups = estimate.get("total_row_groups", "?")
+                row_groups = f"{estimate['estimated_row_groups']}/{total_row_groups}"
                 confidence = estimate["confidence"]
             except RuntimeError as exc:
                 errors.append((case.name, "dryrun", concise_error(exc)))
@@ -545,6 +548,7 @@ def main() -> int:
                     "error" if estimate is None else dryrun_bytes,
                     "error" if profile_failed else "missing" if profiled_bytes is None else profiled_bytes,
                     format_ratio(profiled_bytes, dryrun_bytes),
+                    row_groups,
                     confidence,
                 ]
             )
@@ -560,7 +564,7 @@ def main() -> int:
             print("- none detected")
         print()
         print_table(
-            ["case", "dryrun_bytes", "profiled_bytes", "profiled/dryrun", "confidence"],
+            ["case", "dryrun_bytes", "profiled_bytes", "profiled/dryrun", "row_groups", "confidence"],
             rows,
         )
         if missing_profiles:
