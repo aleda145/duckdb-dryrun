@@ -546,13 +546,15 @@ static bool TryExtractPredicate(const ParsedExpression &expr, Predicate &predica
 	}
 	string column_name;
 	string constant_value;
-	if (TryGetColumnName(*comparison.left, column_name) && TryGetScalarLiteralValue(*comparison.right, constant_value)) {
+	if (TryGetColumnName(*comparison.left, column_name) &&
+	    TryGetScalarLiteralValue(*comparison.right, constant_value)) {
 		predicate.column = std::move(column_name);
 		predicate.op = std::move(op);
 		predicate.value = std::move(constant_value);
 		return true;
 	}
-	if (TryGetScalarLiteralValue(*comparison.left, constant_value) && TryGetColumnName(*comparison.right, column_name)) {
+	if (TryGetScalarLiteralValue(*comparison.left, constant_value) &&
+	    TryGetColumnName(*comparison.right, column_name)) {
 		predicate.column = std::move(column_name);
 		predicate.op = InvertOperator(op);
 		predicate.value = std::move(constant_value);
@@ -763,7 +765,8 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 	unordered_set<string> metadata_files;
 	for (auto &path : parsed.paths) {
 		Connection metadata_connection(*context.db);
-		auto file_metadata_sql = "SELECT file_name, footer_size FROM parquet_file_metadata('" + EscapeSQLString(path) + "')";
+		auto file_metadata_sql =
+		    "SELECT file_name, footer_size FROM parquet_file_metadata('" + EscapeSQLString(path) + "')";
 		auto file_metadata = metadata_connection.Query(file_metadata_sql);
 		if (file_metadata->HasError()) {
 			throw BinderException("dryrun only supports Parquet scans in v1: %s", file_metadata->GetError());
