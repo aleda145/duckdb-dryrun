@@ -37,9 +37,8 @@ const SCENARIOS: Scenario[] = [
     title: "Gaia filter",
     primaryFact: "1 file",
     secondaryFact: "93.2 MB",
-    sql: `SELECT count(*)
-FROM '${GAIA_PATH}'
-WHERE b = 1;`,
+    sql: `SELECT l, b, parallax,
+FROM '${GAIA_PATH}'`,
   },
   {
     id: "house-prices-rowgroups",
@@ -48,7 +47,7 @@ WHERE b = 1;`,
     secondaryFact: "195.6 MB",
     sql: `SELECT count(*)
 FROM '${HOUSE_PRICES_PATH}'
-WHERE price > 500000000;`,
+WHERE price > 500000000`,
   },
   {
     id: "nyc-taxi-2022",
@@ -56,7 +55,7 @@ WHERE price > 500000000;`,
     primaryFact: "12 files",
     secondaryFact: "615.11 MB",
     sql: `SELECT VendorID, passenger_count, trip_distance, fare_amount
-FROM read_parquet(${YELLOW_2022_SQL_LIST});`,
+FROM read_parquet(${YELLOW_2022_SQL_LIST})`,
   },
   {
     id: "nyc-taxi-zone-join",
@@ -67,7 +66,7 @@ FROM read_parquet(${YELLOW_2022_SQL_LIST});`,
 FROM '${YELLOW_2022_PATHS[0]}' t
 JOIN '${TAXI_ZONES_PATH}' z
 ON t.PULocationID = z.LocationID
-WHERE z.Borough = 'Manhattan';`,
+WHERE z.Borough = 'Manhattan'`,
   },
 ];
 
