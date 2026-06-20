@@ -521,7 +521,7 @@ def main() -> int:
             confidence = "error"
             try:
                 estimate = dryrun(case.query, db)
-                dryrun_bytes = int(estimate["estimated_compressed_bytes"])
+                dryrun_bytes = int(estimate["estimated_bytes"])
                 total_row_groups = estimate.get("total_row_groups", "?")
                 row_groups = f"{estimate['estimated_row_groups']}/{total_row_groups}"
                 confidence = estimate["confidence"]

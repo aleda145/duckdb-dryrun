@@ -12,67 +12,55 @@ require dryrun
 
 # Full scan bytes should match the sum of compressed Parquet column chunks,
 # while metadata bytes report the Parquet footer request separately.
-query IIITT
+query IIT
 WITH estimate AS (
 	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2020-04.parquet''')
 ), metadata AS (
-	SELECT
-		sum(total_compressed_size) AS compressed_bytes,
-		sum(total_uncompressed_size) AS uncompressed_bytes
+	SELECT sum(total_compressed_size) AS compressed_bytes
 	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
 ), file_metadata AS (
 	SELECT footer_size + 8 AS metadata_bytes
 	FROM parquet_file_metadata('data/yellow_tripdata_2020-04.parquet')
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
-	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
+	estimate.estimated_bytes = metadata.compressed_bytes,
 	estimate.estimated_metadata_bytes = file_metadata.metadata_bytes,
-	estimate.confidence,
-	estimate.notes
+	estimate.confidence
 FROM estimate, metadata, file_metadata;
 ----
-true	true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+true	true	high
 
 # Single-column projection bytes should match the projected column chunk.
-query IITT
+query IT
 WITH estimate AS (
 	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
 ), metadata AS (
-	SELECT
-		sum(total_compressed_size) AS compressed_bytes,
-		sum(total_uncompressed_size) AS uncompressed_bytes
+	SELECT sum(total_compressed_size) AS compressed_bytes
 	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
 	WHERE path_in_schema = 'PULocationID'
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
-	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
-	estimate.confidence,
-	estimate.notes
+	estimate.estimated_bytes = metadata.compressed_bytes,
+	estimate.confidence
 FROM estimate, metadata;
 ----
-true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+true	high
 
 # A different single-column projection should use that column's chunk bytes.
-query IITT
+query IT
 WITH estimate AS (
 	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet''')
 ), metadata AS (
-	SELECT
-		sum(total_compressed_size) AS compressed_bytes,
-		sum(total_uncompressed_size) AS uncompressed_bytes
+	SELECT sum(total_compressed_size) AS compressed_bytes
 	FROM parquet_metadata('data/yellow_tripdata_2020-04.parquet')
 	WHERE path_in_schema = 'fare_amount'
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
-	estimate.estimated_uncompressed_bytes = metadata.uncompressed_bytes,
-	estimate.confidence,
-	estimate.notes
+	estimate.estimated_bytes = metadata.compressed_bytes,
+	estimate.confidence
 FROM estimate, metadata;
 ----
-true	true	high	estimated_compute_bytes equals estimated_compressed_bytes in v1
+true	high
 
 # Multi-column projection should add the selected column chunks and remain less
 # than a full scan.
@@ -87,28 +75,27 @@ WITH estimate AS (
 	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
-	estimate.estimated_compressed_bytes > 0,
-	estimate.estimated_compressed_bytes < full_scan.estimated_compressed_bytes
+	estimate.estimated_bytes = metadata.compressed_bytes,
+	estimate.estimated_bytes > 0,
+	estimate.estimated_bytes < full_scan.estimated_bytes
 FROM estimate, metadata, full_scan;
 ----
 true	true	true
 
 # Simple filter on a projected column should retain that projection's bytes and
 # lower confidence to medium.
-query IIT
+query IT
 WITH filtered AS (
 	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet'' WHERE PULocationID = 132')
 ), projected AS (
 	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	filtered.estimated_compressed_bytes = projected.estimated_compressed_bytes,
-	filtered.estimated_uncompressed_bytes = projected.estimated_uncompressed_bytes,
+	filtered.estimated_bytes = projected.estimated_bytes,
 	filtered.confidence
 FROM filtered, projected;
 ----
-true	true	medium
+true	medium
 
 # A filter column that is not projected is still required for the scan estimate.
 query IIT
@@ -122,27 +109,26 @@ WITH estimate AS (
 	SELECT * FROM dryrun('SELECT fare_amount FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
-	estimate.estimated_compressed_bytes > projected.estimated_compressed_bytes,
+	estimate.estimated_bytes = metadata.compressed_bytes,
+	estimate.estimated_bytes > projected.estimated_bytes,
 	estimate.confidence
 FROM estimate, metadata, projected;
 ----
 true	true	medium
 
 # LIMIT does not reduce Parquet column-chunk bytes.
-query IIT
+query IT
 WITH limited AS (
 	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet'' LIMIT 100')
 ), projected AS (
 	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	limited.estimated_compressed_bytes = projected.estimated_compressed_bytes,
-	limited.estimated_uncompressed_bytes = projected.estimated_uncompressed_bytes,
+	limited.estimated_bytes = projected.estimated_bytes,
 	limited.confidence
 FROM limited, projected;
 ----
-true	true	high
+true	high
 
 # Complex filters still scan referenced filter columns, but do not claim pruning.
 query IIT
@@ -154,7 +140,7 @@ WITH complex_filter AS (
 	WHERE path_in_schema IN ('PULocationID', 'fare_amount')
 )
 SELECT
-	complex_filter.estimated_compressed_bytes = metadata.compressed_bytes,
+	complex_filter.estimated_bytes = metadata.compressed_bytes,
 	complex_filter.notes LIKE '%filter not analyzable%',
 	complex_filter.confidence
 FROM complex_filter, metadata;
@@ -162,17 +148,16 @@ FROM complex_filter, metadata;
 true	true	low
 
 # COUNT(*) does not require Parquet data columns.
-query IIT
+query IT
 WITH count_estimate AS (
 	SELECT * FROM dryrun('SELECT count(*) FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	count_estimate.estimated_compressed_bytes,
-	count_estimate.estimated_uncompressed_bytes,
+	count_estimate.estimated_bytes,
 	count_estimate.confidence
 FROM count_estimate;
 ----
-0	0	high
+0	high
 
 # COUNT(column), SUM(column), and expression projections use referenced columns.
 query IIT
@@ -186,8 +171,8 @@ WITH aggregate_estimate AS (
 	SELECT * FROM dryrun('SELECT * FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	aggregate_estimate.estimated_compressed_bytes = metadata.compressed_bytes,
-	aggregate_estimate.estimated_compressed_bytes < full_scan.estimated_compressed_bytes,
+	aggregate_estimate.estimated_bytes = metadata.compressed_bytes,
+	aggregate_estimate.estimated_bytes < full_scan.estimated_bytes,
 	aggregate_estimate.confidence
 FROM aggregate_estimate, metadata, full_scan;
 ----
@@ -209,7 +194,7 @@ WITH estimate AS (
 	WHERE path_in_schema IN ('PULocationID', 'VendorID')
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_bytes = metadata.compressed_bytes,
 	estimate.estimated_files
 FROM estimate, metadata;
 ----
@@ -223,7 +208,7 @@ WITH estimate AS (
 	SELECT * FROM dryrun('SELECT PULocationID FROM ''data/yellow_tripdata_2020-04.parquet''')
 )
 SELECT
-	estimate.estimated_compressed_bytes = projected.estimated_compressed_bytes,
+	estimate.estimated_bytes = projected.estimated_bytes,
 	estimate.notes LIKE '%set operation%',
 	estimate.confidence
 FROM estimate, projected;
@@ -240,7 +225,7 @@ WITH estimate AS (
 	WHERE path_in_schema IN ('PULocationID', 'fare_amount')
 )
 SELECT
-	estimate.estimated_compressed_bytes = metadata.compressed_bytes,
+	estimate.estimated_bytes = metadata.compressed_bytes,
 	estimate.notes LIKE '%set operation%',
 	estimate.confidence
 FROM estimate, metadata;

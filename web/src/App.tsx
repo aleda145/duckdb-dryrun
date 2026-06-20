@@ -350,8 +350,8 @@ function ResultList({
   return (
     <div className="result-list">
       <Metric
-        label="estimated_compute_bytes"
-        value={formatBytes(result.estimated_compute_bytes)}
+        label="estimated_bytes"
+        value={formatBytes(result.estimated_bytes)}
       />
       <Metric
         label="rowgroups"

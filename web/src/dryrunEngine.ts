@@ -17,9 +17,7 @@ export type EngineStatus =
   | 'Ready'
 
 export type DryrunRow = {
-  estimated_compute_bytes: number | bigint | null
-  estimated_compressed_bytes: number | bigint | null
-  estimated_uncompressed_bytes: number | bigint | null
+  estimated_bytes: number | bigint | null
   estimated_metadata_bytes: number | bigint | null
   estimated_files: number | bigint | null
   estimated_row_groups: number | bigint | null

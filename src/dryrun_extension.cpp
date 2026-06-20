@@ -35,9 +35,7 @@ namespace duckdb {
 namespace {
 
 struct DryrunEstimate {
-	int64_t estimated_compute_bytes = 0;
-	int64_t estimated_compressed_bytes = 0;
-	int64_t estimated_uncompressed_bytes = 0;
+	int64_t estimated_bytes = 0;
 	int64_t estimated_metadata_bytes = 0;
 	int64_t estimated_files = 0;
 	int64_t estimated_row_groups = 0;
@@ -58,9 +56,7 @@ struct DryrunBindData : public TableFunctionData {
 
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = other_p.Cast<DryrunBindData>();
-		return estimate.estimated_compute_bytes == other.estimate.estimated_compute_bytes &&
-		       estimate.estimated_compressed_bytes == other.estimate.estimated_compressed_bytes &&
-		       estimate.estimated_uncompressed_bytes == other.estimate.estimated_uncompressed_bytes &&
+		return estimate.estimated_bytes == other.estimate.estimated_bytes &&
 		       estimate.estimated_metadata_bytes == other.estimate.estimated_metadata_bytes &&
 		       estimate.estimated_files == other.estimate.estimated_files &&
 		       estimate.estimated_row_groups == other.estimate.estimated_row_groups &&
@@ -114,8 +110,7 @@ struct ColumnStats {
 struct RowGroupEstimate {
 	string file_name;
 	int64_t row_group_id = 0;
-	int64_t compressed_bytes = 0;
-	int64_t uncompressed_bytes = 0;
+	int64_t bytes = 0;
 	unordered_map<string, ColumnStats> stats;
 };
 
@@ -781,7 +776,7 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 		}
 
 		auto metadata_sql = "SELECT file_name, row_group_id, path_in_schema, total_compressed_size, "
-		                    "total_uncompressed_size, stats_min_value, stats_max_value, stats_min, stats_max "
+		                    "stats_min_value, stats_max_value, stats_min, stats_max "
 		                    "FROM parquet_metadata('" +
 		                    EscapeSQLString(path) + "')";
 		auto metadata = metadata_connection.Query(metadata_sql);
@@ -800,18 +795,17 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 			bool include_column = parsed.projection.all_columns ||
 			                      parsed.projection.columns.find(column_name) != parsed.projection.columns.end();
 			if (include_column) {
-				row_group.compressed_bytes += GetOptionalInt64(*metadata, 3, row);
-				row_group.uncompressed_bytes += GetOptionalInt64(*metadata, 4, row);
+				row_group.bytes += GetOptionalInt64(*metadata, 3, row);
 			}
 
 			ColumnStats stats;
-			stats.min_value = GetOptionalString(*metadata, 5, row);
-			stats.max_value = GetOptionalString(*metadata, 6, row);
+			stats.min_value = GetOptionalString(*metadata, 4, row);
+			stats.max_value = GetOptionalString(*metadata, 5, row);
 			if (stats.min_value.empty()) {
-				stats.min_value = GetOptionalString(*metadata, 7, row);
+				stats.min_value = GetOptionalString(*metadata, 6, row);
 			}
 			if (stats.max_value.empty()) {
-				stats.max_value = GetOptionalString(*metadata, 8, row);
+				stats.max_value = GetOptionalString(*metadata, 7, row);
 			}
 			stats.has_min = !stats.min_value.empty();
 			stats.has_max = !stats.max_value.empty();
@@ -845,8 +839,7 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 		if (pruned) {
 			continue;
 		}
-		estimate.estimated_compressed_bytes += row_group.compressed_bytes;
-		estimate.estimated_uncompressed_bytes += row_group.uncompressed_bytes;
+		estimate.estimated_bytes += row_group.bytes;
 		estimate.estimated_row_groups++;
 		scanned_files.insert(row_group.file_name);
 	}
@@ -859,32 +852,24 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 	}
 
 	estimate.estimated_files = UnsafeNumericCast<int64_t>(scanned_files.size());
-	estimate.estimated_compute_bytes = estimate.estimated_compressed_bytes;
-	if (estimate.notes.empty()) {
-		estimate.notes.emplace_back("estimated_compute_bytes equals estimated_compressed_bytes in v1");
-	}
 	return estimate;
 }
 
 static unique_ptr<FunctionData> DryrunBind(ClientContext &context, TableFunctionBindInput &input,
                                            vector<LogicalType> &return_types, vector<string> &names) {
-	names.emplace_back("estimated_compute_bytes");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("estimated_compressed_bytes");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("estimated_uncompressed_bytes");
+	names.emplace_back("estimated_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("estimated_files");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("estimated_row_groups");
+	return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("total_row_groups");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("confidence");
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("notes");
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("estimated_metadata_bytes");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("total_row_groups");
 	return_types.emplace_back(LogicalType::BIGINT);
 
 	if (input.inputs.size() != 1 || input.inputs[0].IsNull()) {
@@ -912,15 +897,13 @@ static void DryrunFunction(ClientContext &context, TableFunctionInput &data_p, D
 	}
 	auto &bind_data = data_p.bind_data->Cast<DryrunBindData>();
 	auto &estimate = bind_data.estimate;
-	output.SetValue(0, 0, Value::BIGINT(estimate.estimated_compute_bytes));
-	output.SetValue(1, 0, Value::BIGINT(estimate.estimated_compressed_bytes));
-	output.SetValue(2, 0, Value::BIGINT(estimate.estimated_uncompressed_bytes));
-	output.SetValue(3, 0, Value::BIGINT(estimate.estimated_files));
-	output.SetValue(4, 0, Value::BIGINT(estimate.estimated_row_groups));
-	output.SetValue(5, 0, Value(estimate.confidence));
-	output.SetValue(6, 0, Value(JoinNotes(estimate.notes)));
-	output.SetValue(7, 0, Value::BIGINT(estimate.estimated_metadata_bytes));
-	output.SetValue(8, 0, Value::BIGINT(estimate.total_row_groups));
+	output.SetValue(0, 0, Value::BIGINT(estimate.estimated_bytes));
+	output.SetValue(1, 0, Value::BIGINT(estimate.estimated_files));
+	output.SetValue(2, 0, Value::BIGINT(estimate.estimated_row_groups));
+	output.SetValue(3, 0, Value::BIGINT(estimate.total_row_groups));
+	output.SetValue(4, 0, Value(estimate.confidence));
+	output.SetValue(5, 0, Value(JoinNotes(estimate.notes)));
+	output.SetValue(6, 0, Value::BIGINT(estimate.estimated_metadata_bytes));
 	output.SetCardinality(1);
 	state.emitted = true;
 }
