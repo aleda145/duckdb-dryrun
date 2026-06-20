@@ -242,6 +242,16 @@ function App() {
     <main className="app-shell">
       <header className="hero">
         <h1>duckdb dryrun</h1>
+        <p>
+          Estimate Parquet scan bytes before running a query.{" "}
+          <a
+            href="https://github.com/aleda145/duckdb-dryrun/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub
+          </a>
+        </p>
       </header>
 
       <section className="scenario-section" aria-label="Gaia dryrun scenarios">
