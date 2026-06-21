@@ -240,11 +240,12 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 24px;
+  min-height: 18px;
   padding: 0 12px;
   color: var(--code-text);
   font-family: var(--mono);
   font-size: 12px;
+  line-height: 1.25;
 }
 
 .call-wrapper {
@@ -280,6 +281,12 @@ textarea:focus {
   background: color-mix(in srgb, var(--code-bg) 92%, var(--accent));
   font: 12px/1.35 var(--mono);
   letter-spacing: 0;
+}
+
+.call-line code::selection,
+.sql-payload::selection {
+  color: #071018;
+  background: #8be7df;
 }
 
 .result-section {

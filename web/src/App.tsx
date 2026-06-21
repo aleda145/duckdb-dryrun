@@ -374,6 +374,12 @@ function App() {
       <section className="query-section" aria-label="SQL dryrun call">
         <div className="duckdb-call">
           <div className="call-line call-wrapper">
+            <code>INSTALL dryrun FROM community;</code>
+          </div>
+          <div className="call-line call-wrapper">
+            <code>LOAD dryrun;</code>
+          </div>
+          <div className="call-line call-wrapper start">
             <code>SELECT * FROM dryrun(&apos;</code>
           </div>
           <textarea
