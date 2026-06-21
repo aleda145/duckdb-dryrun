@@ -5,6 +5,8 @@
 Example:
 
 ```sql
+INSTALL dryrun FROM community;
+LOAD dryrun;
 SELECT *
 FROM dryrun(
     'SELECT * FROM ''https://dryrun-data.dahl.dev/gaia-5m.parquet'''
