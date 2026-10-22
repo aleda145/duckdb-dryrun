@@ -844,7 +844,7 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 }
 
 static unique_ptr<FunctionData> DryrunBind(ClientContext &context, TableFunctionBindInput &input,
-                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
+                                           vector<LogicalType> &return_types, vector<Identifier> &names) {
 	names.emplace_back("estimated_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("estimated_files");
