@@ -31,6 +31,10 @@ See the DuckDB-Wasm demo at https://dryrun.dahl.dev/
 
 This repository is based on the DuckDB extension template.
 
+The extension targets DuckDB 2.0.0. See [updating instructions](docs/UPDATING.md)
+for the required submodule versions. The browser demo remains on its bundled
+DuckDB 1.5.1 Wasm runtime until a matching 2.0 runtime and artifact are installed.
+
 - `make` to build
 - `make wasm` to build for Wasm, placed in `web/`
 - `make test` to run tests

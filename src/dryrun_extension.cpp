@@ -4,10 +4,13 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/main/query_result.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
@@ -209,12 +212,12 @@ static void CollectPathValue(const Value &value, ParsedQueryInfo &result) {
 
 static void CollectPathConstants(const ParsedExpression &expr, ParsedQueryInfo &result) {
 	ParsedExpressionIterator::VisitExpression<ConstantExpression>(
-	    expr, [&](const ConstantExpression &constant) { CollectPathValue(constant.value, result); });
+	    expr, [&](const ConstantExpression &constant) { CollectPathValue(constant.GetLiteral().ToValue(), result); });
 }
 
 static void CollectColumnRefs(const ParsedExpression &expr, unordered_set<string> &columns) {
 	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(expr, [&](const ColumnRefExpression &column_ref) {
-		columns.insert(NormalizeColumn(column_ref.GetColumnName()));
+		columns.insert(NormalizeColumn(column_ref.GetColumnName().GetIdentifierName()));
 	});
 }
 
@@ -228,7 +231,7 @@ static void CollectTableFunctionPaths(const ParsedExpression &function_expr, Par
 		return;
 	}
 	auto &function = function_expr.Cast<FunctionExpression>();
-	auto function_name = StringUtil::Lower(function.function_name);
+	auto function_name = StringUtil::Lower(function.FunctionName().GetIdentifierName());
 	if (function_name == "read_csv" || function_name == "read_json" || function_name == "read_csv_auto" ||
 	    function_name == "read_json_auto") {
 		throw BinderException("dryrun only supports Parquet scans in v1");
@@ -237,10 +240,8 @@ static void CollectTableFunctionPaths(const ParsedExpression &function_expr, Par
 		result.notes.emplace_back("table function not analyzable");
 		return;
 	}
-	for (auto &child : function.children) {
-		if (child) {
-			CollectPathConstants(*child, result);
-		}
+	for (auto &argument : function.GetArguments()) {
+		CollectPathConstants(argument.GetExpression(), result);
 	}
 }
 
@@ -248,10 +249,11 @@ static void ExtractScanSources(const TableRef &ref, ParsedQueryInfo &result) {
 	switch (ref.type) {
 	case TableReferenceType::BASE_TABLE: {
 		auto &base = ref.Cast<BaseTableRef>();
-		auto lower_name = StringUtil::Lower(base.table_name);
+		auto &table_name = base.Table().GetIdentifierName();
+		auto lower_name = StringUtil::Lower(table_name);
 		if (StringUtil::Contains(lower_name, ".parquet")) {
-			RejectHttpGlob(base.table_name);
-			AddUniquePath(result.paths, base.table_name);
+			RejectHttpGlob(table_name);
+			AddUniquePath(result.paths, table_name);
 		} else if (StringUtil::Contains(lower_name, ".csv") || StringUtil::Contains(lower_name, ".json")) {
 			throw BinderException("dryrun only supports Parquet scans in v1");
 		} else {
@@ -354,7 +356,7 @@ static void CollectJoinColumnRefs(const TableRef &ref, unordered_set<string> &co
 		CollectColumnRefs(*join_ref.condition, columns);
 	}
 	for (auto &using_column : join_ref.using_columns) {
-		columns.insert(NormalizeColumn(using_column));
+		columns.insert(NormalizeColumn(using_column.GetIdentifierName()));
 	}
 	for (auto &duplicate_eliminated_column : join_ref.duplicate_eliminated_columns) {
 		if (duplicate_eliminated_column) {
@@ -422,31 +424,19 @@ static bool TryGetColumnName(const ParsedExpression &expr, string &column_name) 
 		return false;
 	}
 	auto &column_ref = expr.Cast<ColumnRefExpression>();
-	column_name = NormalizeColumn(column_ref.GetColumnName());
+	column_name = NormalizeColumn(column_ref.GetColumnName().GetIdentifierName());
 	return true;
 }
 
 static bool TryParseDouble(const string &value, double &result);
 
-static bool IsNumericCastTargetName(const string &type_name) {
-	return type_name == "tinyint" || type_name == "smallint" || type_name == "integer" || type_name == "int" ||
-	       type_name == "bigint" || type_name == "hugeint" || type_name == "utinyint" || type_name == "usmallint" ||
-	       type_name == "uinteger" || type_name == "ubigint" || type_name == "uhugeint" || type_name == "float" ||
-	       type_name == "real" || type_name == "double" || StringUtil::StartsWith(type_name, "decimal");
-}
-
-static bool CastTargetCanUseLiteralString(const LogicalType &target_type, const string &value) {
-	auto target_name = StringUtil::Lower(UnquoteIdentifier(target_type.ToString()));
-	if (target_name == "blob" || target_name == "bytea" || target_name == "varbinary" || target_name == "binary" ||
-	    target_name == "varchar" || target_name == "text" || target_name == "string") {
-		return true;
+static bool CastTargetCanUseLiteralString(const TypeExpression &target_type, const string &value) {
+	if (!target_type.GetCatalog().empty() || !target_type.GetSchema().empty()) {
+		return false;
 	}
-	if (IsNumericCastTargetName(target_name)) {
-		double parsed_value;
-		return TryParseDouble(value, parsed_value);
-	}
-
-	switch (target_type.id()) {
+	// Resolve built-in type aliases without binding or executing the target expression.
+	auto type_id = TransformStringToLogicalTypeId(target_type.GetTypeName().GetIdentifierName());
+	switch (type_id) {
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::VARCHAR:
 		return true;
@@ -474,23 +464,24 @@ static bool CastTargetCanUseLiteralString(const LogicalType &target_type, const 
 static bool TryGetScalarLiteralValue(const ParsedExpression &expr, string &value) {
 	if (expr.GetExpressionClass() == ExpressionClass::CONSTANT) {
 		auto &constant = expr.Cast<ConstantExpression>();
-		if (constant.value.type().id() == LogicalTypeId::BLOB) {
-			value = StringValue::Get(constant.value);
+		auto literal_value = constant.GetLiteral().ToValue();
+		if (literal_value.type().id() == LogicalTypeId::BLOB) {
+			value = StringValue::Get(literal_value);
 		} else {
-			value = StripConstant(constant.value.ToSQLString());
+			value = StripConstant(literal_value.ToSQLString());
 		}
 		return true;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
 		auto &cast = expr.Cast<CastExpression>();
-		if (cast.try_cast || !cast.child) {
+		if (cast.IsTryCast()) {
 			return false;
 		}
 		string child_value;
-		if (!TryGetScalarLiteralValue(*cast.child, child_value)) {
+		if (!TryGetScalarLiteralValue(cast.Child(), child_value)) {
 			return false;
 		}
-		if (!CastTargetCanUseLiteralString(cast.cast_type, child_value)) {
+		if (!CastTargetCanUseLiteralString(cast.TargetType(), child_value)) {
 			return false;
 		}
 		value = std::move(child_value);
@@ -541,20 +532,17 @@ static bool TryExtractPredicate(const ParsedExpression &expr, Predicate &predica
 		return false;
 	}
 	auto &comparison = expr.Cast<ComparisonExpression>();
-	if (!comparison.left || !comparison.right) {
-		return false;
-	}
 	string column_name;
 	string constant_value;
-	if (TryGetColumnName(*comparison.left, column_name) &&
-	    TryGetScalarLiteralValue(*comparison.right, constant_value)) {
+	if (TryGetColumnName(comparison.Left(), column_name) &&
+	    TryGetScalarLiteralValue(comparison.Right(), constant_value)) {
 		predicate.column = std::move(column_name);
 		predicate.op = std::move(op);
 		predicate.value = std::move(constant_value);
 		return true;
 	}
-	if (TryGetScalarLiteralValue(*comparison.left, constant_value) &&
-	    TryGetColumnName(*comparison.right, column_name)) {
+	if (TryGetScalarLiteralValue(comparison.Left(), constant_value) &&
+	    TryGetColumnName(comparison.Right(), column_name)) {
 		predicate.column = std::move(column_name);
 		predicate.op = InvertOperator(op);
 		predicate.value = std::move(constant_value);
@@ -568,7 +556,7 @@ static void ExtractPredicates(const ParsedExpression &expr, vector<Predicate> &p
 	if (expr.GetExpressionClass() == ExpressionClass::CONJUNCTION &&
 	    expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 		auto &conjunction = expr.Cast<ConjunctionExpression>();
-		for (auto &child : conjunction.children) {
+		for (auto &child : conjunction.GetChildren()) {
 			if (child) {
 				ExtractPredicates(*child, predicates, complex_filter, notes);
 			}
@@ -622,7 +610,7 @@ static void AnalyzeQueryNode(const QueryNode &node, ParsedQueryInfo &result, boo
 }
 
 static ParsedQueryInfo ParseDryrunQuery(ClientContext &context, const string &sql) {
-	Parser parser(context.GetParserOptions());
+	Parser parser(context);
 	parser.ParseQuery(sql);
 	if (parser.statements.size() != 1) {
 		throw BinderException("dryrun only supports exactly one SQL statement");
@@ -726,24 +714,21 @@ static string JoinNotes(const vector<string> &notes) {
 	return StringUtil::Join(unique_notes, "; ");
 }
 
-static int64_t GetOptionalInt64(MaterializedQueryResult &result, idx_t column, idx_t row) {
-	auto value = result.GetValue(column, row);
+static int64_t GetOptionalInt64(const Value &value) {
 	if (value.IsNull()) {
 		return 0;
 	}
 	return value.GetValue<int64_t>();
 }
 
-static int64_t GetOptionalUInt64AsInt64(MaterializedQueryResult &result, idx_t column, idx_t row) {
-	auto value = result.GetValue(column, row);
+static int64_t GetOptionalUInt64AsInt64(const Value &value) {
 	if (value.IsNull()) {
 		return 0;
 	}
 	return UnsafeNumericCast<int64_t>(value.GetValue<uint64_t>());
 }
 
-static string GetOptionalString(MaterializedQueryResult &result, idx_t column, idx_t row) {
-	auto value = result.GetValue(column, row);
+static string GetOptionalString(const Value &value) {
 	if (value.IsNull()) {
 		return "";
 	}
@@ -771,10 +756,10 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 		if (file_metadata->HasError()) {
 			throw BinderException("dryrun only supports Parquet scans in v1: %s", file_metadata->GetError());
 		}
-		for (idx_t row = 0; row < file_metadata->RowCount(); row++) {
-			auto file_name = file_metadata->GetValue(0, row).GetValue<string>();
+		for (auto &row : *file_metadata) {
+			auto file_name = row.GetValue<string>(0);
 			if (metadata_files.insert(file_name).second) {
-				estimate.estimated_metadata_bytes += GetOptionalUInt64AsInt64(*file_metadata, 1, row) + 8;
+				estimate.estimated_metadata_bytes += GetOptionalUInt64AsInt64(row.GetBaseValue(1)) + 8;
 			}
 		}
 
@@ -786,11 +771,11 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 		if (metadata->HasError()) {
 			throw BinderException("dryrun only supports Parquet scans in v1: %s", metadata->GetError());
 		}
-		for (idx_t row = 0; row < metadata->RowCount(); row++) {
+		for (auto &row : *metadata) {
 			RowGroupKey key;
-			key.file_name = metadata->GetValue(0, row).GetValue<string>();
-			key.row_group_id = metadata->GetValue(1, row).GetValue<int64_t>();
-			auto column_name = NormalizeColumn(metadata->GetValue(2, row).GetValue<string>());
+			key.file_name = row.GetValue<string>(0);
+			key.row_group_id = row.GetValue<int64_t>(1);
+			auto column_name = NormalizeColumn(row.GetValue<string>(2));
 			auto &row_group = row_groups[key];
 			row_group.file_name = key.file_name;
 			row_group.row_group_id = key.row_group_id;
@@ -798,17 +783,17 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 			bool include_column = parsed.projection.all_columns ||
 			                      parsed.projection.columns.find(column_name) != parsed.projection.columns.end();
 			if (include_column) {
-				row_group.bytes += GetOptionalInt64(*metadata, 3, row);
+				row_group.bytes += GetOptionalInt64(row.GetBaseValue(3));
 			}
 
 			ColumnStats stats;
-			stats.min_value = GetOptionalString(*metadata, 4, row);
-			stats.max_value = GetOptionalString(*metadata, 5, row);
+			stats.min_value = GetOptionalString(row.GetBaseValue(4));
+			stats.max_value = GetOptionalString(row.GetBaseValue(5));
 			if (stats.min_value.empty()) {
-				stats.min_value = GetOptionalString(*metadata, 6, row);
+				stats.min_value = GetOptionalString(row.GetBaseValue(6));
 			}
 			if (stats.max_value.empty()) {
-				stats.max_value = GetOptionalString(*metadata, 7, row);
+				stats.max_value = GetOptionalString(row.GetBaseValue(7));
 			}
 			stats.has_min = !stats.min_value.empty();
 			stats.has_max = !stats.max_value.empty();
@@ -859,7 +844,7 @@ static DryrunEstimate EstimateQuery(ClientContext &context, const ParsedQueryInf
 }
 
 static unique_ptr<FunctionData> DryrunBind(ClientContext &context, TableFunctionBindInput &input,
-                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	names.emplace_back("estimated_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("estimated_files");
@@ -900,13 +885,13 @@ static void DryrunFunction(ClientContext &context, TableFunctionInput &data_p, D
 	}
 	auto &bind_data = data_p.bind_data->Cast<DryrunBindData>();
 	auto &estimate = bind_data.estimate;
-	output.SetValue(0, 0, Value::BIGINT(estimate.estimated_bytes));
-	output.SetValue(1, 0, Value::BIGINT(estimate.estimated_files));
-	output.SetValue(2, 0, Value::BIGINT(estimate.estimated_row_groups));
-	output.SetValue(3, 0, Value::BIGINT(estimate.total_row_groups));
-	output.SetValue(4, 0, Value(estimate.confidence));
-	output.SetValue(5, 0, Value(JoinNotes(estimate.notes)));
-	output.SetValue(6, 0, Value::BIGINT(estimate.estimated_metadata_bytes));
+	output.data[0].Append(Value::BIGINT(estimate.estimated_bytes));
+	output.data[1].Append(Value::BIGINT(estimate.estimated_files));
+	output.data[2].Append(Value::BIGINT(estimate.estimated_row_groups));
+	output.data[3].Append(Value::BIGINT(estimate.total_row_groups));
+	output.data[4].Append(Value(estimate.confidence));
+	output.data[5].Append(Value(JoinNotes(estimate.notes)));
+	output.data[6].Append(Value::BIGINT(estimate.estimated_metadata_bytes));
 	output.SetCardinality(1);
 	state.emitted = true;
 }

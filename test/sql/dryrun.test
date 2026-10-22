@@ -89,6 +89,21 @@ FROM dryrun('SELECT * FROM read_parquet(''{TEMP_DIR}/dryrun_events_*.parquet'')'
 ----
 2	true
 
+# Function arguments, list literals, and quoted identifiers use the DuckDB 2.0 AST.
+query IIT
+SELECT estimated_files, estimated_bytes > 0, confidence
+FROM dryrun('SELECT "I" FROM read_parquet([''{TEMP_DIR}/dryrun_events_a.parquet'', ''{TEMP_DIR}/dryrun_events_b.parquet''], union_by_name = true)');
+----
+2	true	high
+
+# JOIN USING identifiers must still contribute their column bytes.
+query I
+SELECT using_join.estimated_bytes = on_join.estimated_bytes
+FROM dryrun('SELECT count(*) FROM ''{TEMP_DIR}/dryrun_events_a.parquet'' a JOIN ''{TEMP_DIR}/dryrun_events_b.parquet'' b USING (i)') using_join,
+     dryrun('SELECT count(*) FROM ''{TEMP_DIR}/dryrun_events_a.parquet'' a JOIN ''{TEMP_DIR}/dryrun_events_b.parquet'' b ON a.i = b.i') on_join;
+----
+true
+
 # Generic HTTP/HTTPS does not provide file listing for glob expansion.
 statement error
 SELECT * FROM dryrun('SELECT * FROM ''https://dryrun-data.dahl.dev/yellow_tripdata_2022-0*.parquet''');
@@ -105,6 +120,13 @@ FROM dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet'' WHERE i < 10') f
      dryrun('SELECT * FROM ''{TEMP_DIR}/dryrun_events.parquet''') full_scan;
 ----
 true	true	medium
+
+# Numeric type aliases and conjunction children remain analyzable with the new AST.
+query IIT
+SELECT estimated_row_groups, total_row_groups, confidence
+FROM dryrun('SELECT i FROM ''{TEMP_DIR}/dryrun_events.parquet'' WHERE i >= CAST(''2048'' AS INT8) AND i < 4096');
+----
+1	2	medium
 
 # BLOB typed literals should be treated as scalar predicate constants.
 query IIII

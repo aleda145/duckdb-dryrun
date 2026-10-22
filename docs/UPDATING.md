@@ -1,4 +1,29 @@
-# Extension updating 
+# DuckDB 2.0 target
+
+The extension source and distribution workflow target DuckDB `v2.0.0` and
+`extension-ci-tools` branch `v2.0-cyanoptera`. Use CMake 3.14 or newer and a
+C++17 compiler.
+
+Before committing this upgrade, update and stage the submodules yourself:
+
+```sh
+git -C duckdb fetch origin tag v2.0.0
+git -C duckdb checkout v2.0.0
+git -C extension-ci-tools fetch origin v2.0-cyanoptera
+git -C extension-ci-tools checkout --detach origin/v2.0-cyanoptera
+git add duckdb extension-ci-tools
+```
+
+The code quality workflow uses the checked-in DuckDB submodule; its deprecated
+`duckdb_version` input does not switch versions. The distribution workflow
+explicitly builds against `v2.0.0`.
+
+The browser demo still uses its bundled DuckDB 1.5.1 runtime and extension.
+The 2.0 Wasm build is copied to `web/public/extensions/v2.0.0/wasm_eh` and
+requires a matching DuckDB-Wasm runtime before the demo can load it. Do not
+replace the existing 1.5.1 artifact with a 2.0 binary.
+
+# Extension updating
 When cloning this template, the target version of DuckDB should be the latest stable release of DuckDB. However, there 
 will inevitably come a time when a new DuckDB is released and the extension repository needs updating. This process goes
 as follows:
